@@ -429,8 +429,9 @@ def insert_record(conn: sqlite3.Connection, keyword: str, video: dict, spot: dic
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--keyword", default="武汉钓鱼")
-    ap.add_argument("--limit", type=int, default=1)
+    ap.add_argument("--keyword", default="武汉钓鱼", help="Search keyword; also stored with --url imports unless overridden")
+    ap.add_argument("--limit", type=int, default=1, help="Search result limit; ignored when --url is provided")
+    ap.add_argument("--url", default="", help="Process a single Douyin video URL directly instead of searching by keyword")
     ap.add_argument("--city", default="武汉")
     ap.add_argument("--session", default="douyin-fishing-batch")
     ap.add_argument("--llm-url", default=DEFAULT_LLM_URL, help="OpenAI-compatible /v1/chat/completions endpoint")
@@ -451,7 +452,8 @@ def main() -> None:
         raise ValueError("--delay-max must be >= --delay-min and delays must be non-negative")
 
     results = []
-    items = search(args.keyword, args.limit)
+    direct_url = args.url.strip()
+    items = [{"url": direct_url, "desc": "", "author": ""}] if direct_url else search(args.keyword, args.limit)
     for index, item in enumerate(items):
         url = item.get("url", "")
         if not url:

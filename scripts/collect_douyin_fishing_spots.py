@@ -43,19 +43,28 @@ COMMENT_PLACE_HINTS = [
 COMMENT_NOISE = {"全部评论", "留下你的精彩评论吧", "大家都在搜：", "分享", "回复", "作者", "加载中", "关注", "推荐视频"}
 
 # Fish species aliases commonly appearing in Wuhan fishing videos.
+# Keys are canonical names persisted into DB; values are surface forms used by
+# rules and by the LLM normalizer below. Keep longer/more specific aliases first
+# where ambiguity exists (e.g. 青尾鲴 before 青尾).
 FISH_PATTERNS = {
-    "黄尾": ["黄尾", "黄尾鲴"],
-    "青尾鲴": ["青尾", "青尾鲴", "青尾鲴鱼"],
-    "鲫鱼": ["鲫鱼", "斤鲫"],
-    "鲤鱼": ["鲤鱼", "巨鲤", "大鲤鱼"],
-    "草鱼": ["草鱼"],
-    "鳊鱼": ["鳊鱼", "武昌鱼"],
-    "翘嘴": ["翘嘴"],
-    "罗非": ["罗非", "罗非鱼"],
-    "鲢鳙": ["鲢鳙", "鲢鱼", "鳙鱼"],
-    "鲮鱼": ["鲮鱼", "小鲮鱼"],
-    "黑鱼": ["黑鱼", "乌鱼"],
-    "鳜鱼": ["鳜鱼", "桂鱼"],
+    "黄尾鲴": ["黄尾鲴", "黄尾", "黄片", "黄尾巴"],
+    "青尾鲴": ["青尾鲴", "青尾鲴鱼", "青尾", "青尾巴"],
+    "鲫鱼": ["工程鲫", "板鲫", "大板鲫", "斤鲫", "土鲫", "野鲫", "鲫鱼"],
+    "鲤鱼": ["大鲤鱼", "巨鲤", "拐子", "鲤鱼"],
+    "草鱼": ["草鱼", "草混", "草棒"],
+    "鳊鱼": ["武昌鱼", "鳊鱼"],
+    "翘嘴": ["翘嘴红鲌", "大翘嘴", "翘壳", "翘嘴", "白鱼"],
+    "罗非鱼": ["罗非鱼", "非洲鲫", "罗非"],
+    "鲢鳙": ["花鲢", "白鲢", "胖头鱼", "大头鱼", "鲢鳙", "鲢鱼", "鳙鱼"],
+    "鲮鱼": ["土鲮", "麦鲮", "泰鲮", "小鲮鱼", "鲮鱼"],
+    "黑鱼": ["乌鳢", "乌鱼", "财鱼", "黑鱼"],
+    "鳜鱼": ["桂鱼", "季花鱼", "鳜鱼"],
+    "黄颡鱼": ["黄颡鱼", "黄骨鱼", "昂刺鱼", "黄辣丁", "黄鸭叫", "黄骨", "黄颡"],
+    "鲶鱼": ["鲶鱼", "塘鲺", "胡子鲶"],
+    "鲈鱼": ["鲈鱼", "海鲈", "七星鲈"],
+    "红尾": ["红尾", "红尾鱼"],
+    "马口": ["马口", "马口鱼"],
+    "白条": ["白条", "餐条", "参条", "蓝刀"],
 }
 DEFAULT_LLM_URL = os.getenv("OPENAI_BASE_URL", "http://100.90.54.85:8080/v1").rstrip("/") + "/chat/completions"
 
@@ -192,20 +201,16 @@ def log_llm_debug(message: str, enabled: bool = True) -> None:
         print(f"[llm] {message}", file=sys.stderr, flush=True)
 
 
-def extract_places_with_llm(text: str, city: str, llm_url: str = DEFAULT_LLM_URL, debug: bool = True) -> list[str]:
-    prompt = f"""从下面抖音钓鱼视频文本中提取实际地名/钓点候选。
-要求：
-- 只返回 JSON 数组，例如 [\"野芷湖公园\",\"东荆河\"]
-- 优先提取河流、湖泊、水库、公园、村/桥/闸/江滩等可地理编码的地点
-- 不要返回泛词（钓点、野钓、附近）、人名、鱼种、装备、城市名本身
-- 若无明确地点返回 []
-- 城市上下文：{city}
-
-文本：
-{text[:6000]}"""
+def _chat_json_array_with_llm(
+    prompt: str,
+    llm_url: str = DEFAULT_LLM_URL,
+    debug: bool = True,
+    log_prefix: str = "llm",
+    system_prompt: str = "你是信息抽取器，只输出合法 JSON，不要解释。",
+) -> list[object]:
     payload = {
         "messages": [
-            {"role": "system", "content": "你是地名抽取器，只输出合法 JSON，不要解释。"},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ],
         "stream": False,
@@ -218,50 +223,114 @@ def extract_places_with_llm(text: str, city: str, llm_url: str = DEFAULT_LLM_URL
         headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "Mozilla/5.0"},
         method="POST",
     )
-    log_llm_debug(f"request url={llm_url} city={city} input_chars={len(text)} body_bytes={len(body)}", debug)
-    log_llm_debug(f"input_begin\n{text[:6000]}\ninput_end", debug)
+    log_llm_debug(f"{log_prefix} request url={llm_url} prompt_chars={len(prompt)} body_bytes={len(body)}", debug)
+    log_llm_debug(f"{log_prefix} input_begin\n{prompt[:6000]}\ninput_end", debug)
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             raw = resp.read().decode("utf-8", "replace")
-            log_llm_debug(f"response status={resp.status} bytes={len(raw.encode('utf-8'))}", debug)
+            log_llm_debug(f"{log_prefix} response status={resp.status} bytes={len(raw.encode('utf-8'))}", debug)
         data = json.loads(raw)
         choice = data["choices"][0]
         content = choice["message"]["content"].strip()
         log_llm_debug(
-            f"model={data.get('model', '')} finish_reason={choice.get('finish_reason', '')} output_chars={len(content)}",
+            f"{log_prefix} model={data.get('model', '')} finish_reason={choice.get('finish_reason', '')} output_chars={len(content)}",
             debug,
         )
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:500]
-        log_llm_debug(f"http_error status={exc.code} detail={detail!r}", debug)
+        log_llm_debug(f"{log_prefix} http_error status={exc.code} detail={detail!r}", debug)
         return []
     except (urllib.error.URLError, TimeoutError, KeyError, IndexError, json.JSONDecodeError) as exc:
-        log_llm_debug(f"error type={type(exc).__name__} detail={exc}", debug)
+        log_llm_debug(f"{log_prefix} error type={type(exc).__name__} detail={exc}", debug)
         return []
 
     # Some models may wrap JSON in markdown or add prose; salvage the first JSON array.
     match = re.search(r"\[[\s\S]*\]", content)
     if not match:
-        log_llm_debug(f"no_json_array content_preview={content[:200]!r}", debug)
+        log_llm_debug(f"{log_prefix} no_json_array content_preview={content[:200]!r}", debug)
         return []
     try:
         parsed = json.loads(match.group(0))
     except json.JSONDecodeError as exc:
-        log_llm_debug(f"json_parse_error detail={exc} content_preview={content[:200]!r}", debug)
+        log_llm_debug(f"{log_prefix} json_parse_error detail={exc} content_preview={content[:200]!r}", debug)
         return []
     if not isinstance(parsed, list):
-        log_llm_debug(f"unexpected_json_type type={type(parsed).__name__}", debug)
+        log_llm_debug(f"{log_prefix} unexpected_json_type type={type(parsed).__name__}", debug)
         return []
+    return parsed
+
+
+def extract_places_with_llm(text: str, city: str, llm_url: str = DEFAULT_LLM_URL, debug: bool = True) -> list[str]:
+    prompt = f"""从下面抖音钓鱼视频文本中提取实际地名/钓点候选。
+要求：
+- 只返回 JSON 数组，例如 [\"野芷湖公园\",\"东荆河\"]
+- 优先提取河流、湖泊、水库、公园、村/桥/闸/江滩等可地理编码的地点
+- 不要返回泛词（钓点、野钓、附近）、人名、鱼种、装备、城市名本身
+- 若无明确地点返回 []
+- 城市上下文：{city}
+
+文本：
+{text[:6000]}"""
+    parsed = _chat_json_array_with_llm(prompt, llm_url, debug, "place", "你是地名抽取器，只输出合法 JSON，不要解释。")
     places = _dedupe_places([p for p in parsed if isinstance(p, str)])
-    log_llm_debug(f"places={places}", debug)
+    log_llm_debug(f"place places={places}", debug)
     return places
 
 
-def extract_fish_species(text: str) -> list[str]:
+def normalize_fish_species(values: list[str]) -> list[str]:
     species: list[str] = []
+    for value in values:
+        name = str(value).strip(" ，,。:：；;、\"'[]{}()（）")
+        if not name:
+            continue
+        matched = ""
+        for canonical, aliases in FISH_PATTERNS.items():
+            if name == canonical or name in aliases:
+                matched = canonical
+                break
+        if not matched:
+            for canonical, aliases in FISH_PATTERNS.items():
+                if any(len(alias) >= 2 and alias in name for alias in aliases):
+                    matched = canonical
+                    break
+        if matched and matched not in species:
+            species.append(matched)
+        elif not matched and len(name) <= 6 and name not in species:
+            species.append(name)
+    return species
+
+
+def extract_fish_species(text: str) -> list[str]:
+    found: list[str] = []
     for canonical, aliases in FISH_PATTERNS.items():
-        if any(alias in text for alias in aliases) and canonical not in species:
-            species.append(canonical)
+        if canonical in text or any(alias in text for alias in aliases):
+            found.append(canonical)
+    return normalize_fish_species(found)
+
+
+def extract_fish_species_with_llm(text: str, llm_url: str = DEFAULT_LLM_URL, debug: bool = True) -> list[str]:
+    known = "、".join(FISH_PATTERNS.keys())
+    prompt = f"""从下面抖音钓鱼视频文本中提取明确出现的鱼种。
+要求：
+- 只返回 JSON 数组，例如 [\"黄尾鲴\",\"鲫鱼\"]
+- 将俗称归一化为常见鱼名；已知候选包括：{known}
+- 只有文本明确提到才返回；不要凭地点、饵料、钓法推测
+- 不要返回地名、装备、饵料、斤数、钓点、野钓、空军等非鱼种词
+- 若无明确鱼种返回 []
+
+文本：
+{text[:6000]}"""
+    parsed = _chat_json_array_with_llm(prompt, llm_url, debug, "fish", "你是鱼种抽取器，只输出合法 JSON，不要解释。")
+    raw: list[str] = []
+    for item in parsed:
+        if isinstance(item, str):
+            raw.append(item)
+        elif isinstance(item, dict):
+            value = item.get("name") or item.get("species") or item.get("fish") or item.get("鱼种")
+            if isinstance(value, str):
+                raw.append(value)
+    species = normalize_fish_species(raw)
+    log_llm_debug(f"fish species={species}", debug)
     return species
 
 
@@ -277,9 +346,16 @@ def parse_video(search_item: dict, extracted: dict, city: str = "武汉", llm_ur
     candidates = extract_places_with_llm(haystack, city, llm_url, debug=llm_debug) if use_llm else []
     fallback_candidates = [place for place in PLACE_PATTERNS if place in haystack]
     candidates = _dedupe_places([*candidates, *fallback_candidates])
-    fish_species = extract_fish_species(haystack)
-    fish_source = "title+desc+page_text" if fish_species else ""
-    fish_confidence = 0.9 if fish_species else 0.0
+    rule_fish_species = extract_fish_species(haystack)
+    llm_fish_species = extract_fish_species_with_llm(haystack, llm_url, debug=llm_debug) if use_llm else []
+    fish_species = normalize_fish_species([*rule_fish_species, *llm_fish_species])
+    fish_sources = []
+    if rule_fish_species:
+        fish_sources.append("rule:FISH_PATTERNS")
+    if llm_fish_species:
+        fish_sources.append("llm:title+desc+page_text")
+    fish_source = "+".join(fish_sources)
+    fish_confidence = 0.95 if llm_fish_species else (0.85 if rule_fish_species else 0.0)
     return {
         "title": title,
         "author": search_item.get("author", ""),
@@ -358,7 +434,7 @@ def main() -> None:
     ap.add_argument("--city", default="武汉")
     ap.add_argument("--session", default="douyin-fishing-batch")
     ap.add_argument("--llm-url", default=DEFAULT_LLM_URL, help="OpenAI-compatible /v1/chat/completions endpoint")
-    ap.add_argument("--no-llm", action="store_true", help="Disable LLM place extraction and use fallback PLACE_PATTERNS only")
+    ap.add_argument("--no-llm", action="store_true", help="Disable LLM place/fish extraction and use rule fallbacks only")
     ap.add_argument("--quiet-llm", action="store_true", help="Disable LLM debug logs")
     ap.add_argument("--delay-min", type=float, default=8.0, help="Minimum sleep seconds between video detail requests")
     ap.add_argument("--delay-max", type=float, default=20.0, help="Maximum sleep seconds between video detail requests")

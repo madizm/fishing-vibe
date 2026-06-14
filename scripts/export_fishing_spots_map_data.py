@@ -16,19 +16,24 @@ DEFAULT_DB = ROOT / "data" / "fishing_spots.sqlite"
 DEFAULT_OUT = ROOT / "web" / "fishing-spots.json"
 
 FISH_PATTERNS: dict[str, list[str]] = {
-    "黄尾": ["黄尾", "黄尾鲴"],
-    "青尾鲴": ["青尾", "青尾鲴", "青尾鲴鱼"],
-    "鲫鱼": ["鲫鱼", "斤鲫", "板鲫"],
-    "鲤鱼": ["鲤鱼", "巨鲤", "大鲤鱼"],
-    "草鱼": ["草鱼"],
-    "鳊鱼": ["鳊鱼", "武昌鱼"],
-    "翘嘴": ["翘嘴"],
-    "罗非": ["罗非", "罗非鱼"],
-    "鲢鳙": ["鲢鳙", "鲢鱼", "鳙鱼"],
-    "鲮鱼": ["鲮鱼", "小鲮鱼"],
-    "黑鱼": ["黑鱼", "乌鱼"],
-    "鳜鱼": ["鳜鱼", "桂鱼"],
-    "黄骨鱼": ["黄骨", "黄颡", "黄辣丁"],
+    "黄尾鲴": ["黄尾鲴", "黄尾", "黄片", "黄尾巴"],
+    "青尾鲴": ["青尾鲴", "青尾鲴鱼", "青尾", "青尾巴"],
+    "鲫鱼": ["工程鲫", "板鲫", "大板鲫", "斤鲫", "土鲫", "野鲫", "鲫鱼"],
+    "鲤鱼": ["大鲤鱼", "巨鲤", "拐子", "鲤鱼"],
+    "草鱼": ["草鱼", "草混", "草棒"],
+    "鳊鱼": ["武昌鱼", "鳊鱼"],
+    "翘嘴": ["翘嘴红鲌", "大翘嘴", "翘壳", "翘嘴", "白鱼"],
+    "罗非鱼": ["罗非鱼", "非洲鲫", "罗非"],
+    "鲢鳙": ["花鲢", "白鲢", "胖头鱼", "大头鱼", "鲢鳙", "鲢鱼", "鳙鱼"],
+    "鲮鱼": ["土鲮", "麦鲮", "泰鲮", "小鲮鱼", "鲮鱼"],
+    "黑鱼": ["乌鳢", "乌鱼", "财鱼", "黑鱼"],
+    "鳜鱼": ["桂鱼", "季花鱼", "鳜鱼"],
+    "黄颡鱼": ["黄颡鱼", "黄骨鱼", "昂刺鱼", "黄辣丁", "黄鸭叫", "黄骨", "黄颡"],
+    "鲶鱼": ["鲶鱼", "塘鲺", "胡子鲶"],
+    "鲈鱼": ["鲈鱼", "海鲈", "七星鲈"],
+    "红尾": ["红尾", "红尾鱼"],
+    "马口": ["马口", "马口鱼"],
+    "白条": ["白条", "餐条", "参条", "蓝刀"],
 }
 
 
@@ -46,13 +51,36 @@ def parse_json_list(value: Any) -> list[str]:
     return [str(v).strip() for v in parsed if str(v).strip()]
 
 
+def normalize_fish_species(values: list[str]) -> list[str]:
+    species: list[str] = []
+    for value in values:
+        name = str(value).strip(" ，,。:：；;、\"'[]{}()（）")
+        if not name:
+            continue
+        matched = ""
+        for canonical, aliases in FISH_PATTERNS.items():
+            if name == canonical or name in aliases:
+                matched = canonical
+                break
+        if not matched:
+            for canonical, aliases in FISH_PATTERNS.items():
+                if any(len(alias) >= 2 and alias in name for alias in aliases):
+                    matched = canonical
+                    break
+        if matched and matched not in species:
+            species.append(matched)
+        elif not matched and len(name) <= 6 and name not in species:
+            species.append(name)
+    return species
+
+
 def infer_fish_species(*texts: str) -> list[str]:
     haystack = "\n".join(t or "" for t in texts)
     found: list[str] = []
     for canonical, aliases in FISH_PATTERNS.items():
-        if any(alias in haystack for alias in aliases):
+        if canonical in haystack or any(alias in haystack for alias in aliases):
             found.append(canonical)
-    return found
+    return normalize_fish_species(found)
 
 
 def export(db_path: Path, out_path: Path) -> dict[str, Any]:
@@ -75,7 +103,7 @@ def export(db_path: Path, out_path: Path) -> dict[str, Any]:
     features: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
-        species = parse_json_list(item.get("fish_species"))
+        species = normalize_fish_species(parse_json_list(item.get("fish_species")))
         source = item.get("fish_species_source") or ""
         fish_confidence = item.get("fish_confidence")
         if not species:

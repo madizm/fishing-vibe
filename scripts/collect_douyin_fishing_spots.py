@@ -4,7 +4,7 @@
 Pipeline:
 1. opencli douyin search <keyword>
 2. opencli browser open/extract each video URL
-3. extract title, publish time, place candidates
+3. extract title, publish time, place candidates, fish species
 4. tianditu geocode
 5. insert into SQLite
 """
@@ -35,8 +35,28 @@ GEOCODE_SCRIPT = ROOT / ".agents" / "skills" / "tianditu-geocode" / "tianditu_ge
 PLACE_PATTERNS = [
     "野芷湖公园", "野芷湖", "东荆河", "倒水河", "汉江", "长江", "府河", "滠水河",
     "汤逊湖", "梁子湖", "后官湖", "严西湖", "严东湖", "金银湖", "墨水湖", "南湖",
-    "蔡甸江滩", "汉口江滩", "武昌江滩", "联丰村",
+    "蔡甸江滩", "汉口江滩", "武昌江滩", "联丰村", "走马岭水厂",
 ]
+COMMENT_PLACE_HINTS = [
+    "江", "河", "湖", "水库", "江滩", "闸", "桥", "泵站", "水厂", "码头", "村", "湾", "港", "沟", "渠", "公园",
+]
+COMMENT_NOISE = {"全部评论", "留下你的精彩评论吧", "大家都在搜：", "分享", "回复", "作者", "加载中", "关注", "推荐视频"}
+
+# Fish species aliases commonly appearing in Wuhan fishing videos.
+FISH_PATTERNS = {
+    "黄尾": ["黄尾", "黄尾鲴"],
+    "青尾鲴": ["青尾", "青尾鲴", "青尾鲴鱼"],
+    "鲫鱼": ["鲫鱼", "斤鲫"],
+    "鲤鱼": ["鲤鱼", "巨鲤", "大鲤鱼"],
+    "草鱼": ["草鱼"],
+    "鳊鱼": ["鳊鱼", "武昌鱼"],
+    "翘嘴": ["翘嘴"],
+    "罗非": ["罗非", "罗非鱼"],
+    "鲢鳙": ["鲢鳙", "鲢鱼", "鳙鱼"],
+    "鲮鱼": ["鲮鱼", "小鲮鱼"],
+    "黑鱼": ["黑鱼", "乌鱼"],
+    "鳜鱼": ["鳜鱼", "桂鱼"],
+}
 DEFAULT_LLM_URL = os.getenv("OPENAI_BASE_URL", "http://100.90.54.85:8080/v1").rstrip("/") + "/chat/completions"
 
 
@@ -70,13 +90,27 @@ def init_db(conn: sqlite3.Connection) -> None:
       query_name TEXT,
       longitude REAL,
       latitude REAL,
+      fish_species TEXT,
+      fish_species_source TEXT,
+      fish_confidence REAL,
       geocode_score INTEGER,
       geocode_level TEXT,
       confidence REAL,
+      source_type TEXT,
       source_text TEXT,
       created_at TEXT,
       FOREIGN KEY(video_id) REFERENCES videos(id)
     )""")
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(fishing_spots)")}
+    if "fish_species" not in columns:
+        conn.execute("ALTER TABLE fishing_spots ADD COLUMN fish_species TEXT")
+    if "fish_species_source" not in columns:
+        conn.execute("ALTER TABLE fishing_spots ADD COLUMN fish_species_source TEXT")
+    if "fish_confidence" not in columns:
+        conn.execute("ALTER TABLE fishing_spots ADD COLUMN fish_confidence REAL")
+    if "source_type" not in columns:
+        conn.execute("ALTER TABLE fishing_spots ADD COLUMN source_type TEXT")
+    conn.execute("UPDATE fishing_spots SET source_type='video_text' WHERE source_type IS NULL OR source_type='' ")
 
 
 def search(keyword: str, limit: int) -> list[dict]:
@@ -88,6 +122,57 @@ def extract_video(url: str, session: str) -> dict:
     run(["opencli", "browser", session, "open", url], timeout=120)
     out = run(["opencli", "browser", session, "extract", "--chunk-size", "10000"], timeout=120)
     return json.loads(out)
+
+
+def browser_eval(session: str, js: str) -> object:
+    out = run(["opencli", "browser", session, "eval", js], timeout=90)
+    return json.loads(out)
+
+
+def is_comment_candidate(line: str) -> bool:
+    if line in COMMENT_NOISE or line == "...":
+        return False
+    if re.fullmatch(r"\d+", line) or re.fullmatch(r"\d{1,2}:\d{2}", line):
+        return False
+    if re.search(r"\d+天前|小时前|分钟前|·湖北|·武汉", line):
+        return False
+    if len(line) < 2 or len(line) > 100:
+        return False
+    return any(hint in line for hint in COMMENT_PLACE_HINTS) or "钓点" in line or "钓位" in line or "哪里" in line or "位置" in line
+
+
+def extract_comment_place_names(line: str, city: str) -> list[str]:
+    candidates: list[str] = []
+    for pattern in [
+        r"([\u4e00-\u9fa5]{2,12}(?:江滩|水库|水厂|泵站|公园|闸|桥|码头|江|河|湖|村|湾|港|沟|渠))",
+        r"([\u4e00-\u9fa5]{2,8}钓点)",
+        r"([\u4e00-\u9fa5]{2,8}钓位)",
+    ]:
+        for m in re.finditer(pattern, line):
+            name = m.group(1).strip(" ，,。.!！?？")
+            name = re.sub(r"^(湖北省|武汉市|武汉|湖北|去|到|在)", "", name)
+            name = re.sub(r"(黄尾钓点|钓点|钓位)$", "", name)
+            if name and len(name) >= 2 and name not in candidates and name not in {city, "同款", "哪里"}:
+                candidates.append(name)
+    return _dedupe_places(candidates)
+
+
+def extract_comment_spot_clues(session: str, city: str, scrolls: int = 0, wait_seconds: float = 2.0) -> list[dict]:
+    for _ in range(scrolls):
+        run(["opencli", "browser", session, "scroll", "down", "--amount", "1200"], timeout=60)
+        if wait_seconds:
+            time.sleep(wait_seconds)
+    js = "(() => { const text = document.body.innerText || ''; const start = text.indexOf('全部评论'); const endMarks = ['下载客户端，桌面快捷访问', '广告投放', '用户服务协议']; let end = text.length; for (const mark of endMarks) { const idx = text.indexOf(mark, start >= 0 ? start : 0); if (idx > 0) end = Math.min(end, idx); } const slice = start >= 0 ? text.slice(start, end) : ''; return slice.split(/\\n+/).map(s => s.trim()).filter(Boolean); })()"
+    data = browser_eval(session, js)
+    lines = [str(x) for x in data] if isinstance(data, list) else []
+    clues: list[dict] = []
+    for line in lines:
+        if not is_comment_candidate(line):
+            continue
+        places = extract_comment_place_names(line, city)
+        if places:
+            clues.append({"text": line, "place_candidates": places})
+    return clues
 
 
 def _dedupe_places(places: list[str]) -> list[str]:
@@ -172,6 +257,14 @@ def extract_places_with_llm(text: str, city: str, llm_url: str = DEFAULT_LLM_URL
     return places
 
 
+def extract_fish_species(text: str) -> list[str]:
+    species: list[str] = []
+    for canonical, aliases in FISH_PATTERNS.items():
+        if any(alias in text for alias in aliases) and canonical not in species:
+            species.append(canonical)
+    return species
+
+
 def parse_video(search_item: dict, extracted: dict, city: str = "武汉", llm_url: str = DEFAULT_LLM_URL, use_llm: bool = True, llm_debug: bool = True) -> dict:
     content = extracted.get("content", "")
     title = extracted.get("title", "")
@@ -184,6 +277,9 @@ def parse_video(search_item: dict, extracted: dict, city: str = "武汉", llm_ur
     candidates = extract_places_with_llm(haystack, city, llm_url, debug=llm_debug) if use_llm else []
     fallback_candidates = [place for place in PLACE_PATTERNS if place in haystack]
     candidates = _dedupe_places([*candidates, *fallback_candidates])
+    fish_species = extract_fish_species(haystack)
+    fish_source = "title+desc+page_text" if fish_species else ""
+    fish_confidence = 0.9 if fish_species else 0.0
     return {
         "title": title,
         "author": search_item.get("author", ""),
@@ -191,6 +287,9 @@ def parse_video(search_item: dict, extracted: dict, city: str = "武汉", llm_ur
         "publish_time": publish_time,
         "raw_text": content[:2000],
         "place_candidates": candidates,
+        "fish_species": fish_species,
+        "fish_species_source": fish_source,
+        "fish_confidence": fish_confidence,
     }
 
 
@@ -231,18 +330,22 @@ def insert_record(conn: sqlite3.Connection, keyword: str, video: dict, spot: dic
     )
     video_id = conn.execute("SELECT id FROM videos WHERE url=?", (video["url"],)).fetchone()[0]
     conn.execute(
-        """INSERT INTO fishing_spots(video_id, place_name, query_name, longitude, latitude, geocode_score, geocode_level, confidence, source_text, created_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?)""",
+        """INSERT INTO fishing_spots(video_id, place_name, query_name, longitude, latitude, fish_species, fish_species_source, fish_confidence, geocode_score, geocode_level, confidence, source_type, source_text, created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             video_id,
             spot["place_name"],
             spot["query_name"],
             spot["longitude"],
             spot["latitude"],
+            json.dumps(video.get("fish_species", []), ensure_ascii=False),
+            video.get("fish_species_source", ""),
+            video.get("fish_confidence", 0.0),
             spot["geocode_score"],
             spot["geocode_level"],
             spot["confidence"],
-            video["raw_text"][:500],
+            spot.get("source_type", "video_text"),
+            spot.get("source_text", video["raw_text"][:500]),
             now,
         ),
     )
@@ -259,6 +362,9 @@ def main() -> None:
     ap.add_argument("--quiet-llm", action="store_true", help="Disable LLM debug logs")
     ap.add_argument("--delay-min", type=float, default=8.0, help="Minimum sleep seconds between video detail requests")
     ap.add_argument("--delay-max", type=float, default=20.0, help="Maximum sleep seconds between video detail requests")
+    ap.add_argument("--include-comments", action="store_true", help="Extract visible comment-area location clues as lower-confidence spot candidates")
+    ap.add_argument("--comment-scrolls", type=int, default=0, help="How many times to scroll before reading comments")
+    ap.add_argument("--comment-wait", type=float, default=2.0, help="Seconds to wait after each comment scroll")
     args = ap.parse_args()
 
     DB_PATH.parent.mkdir(exist_ok=True)
@@ -283,13 +389,46 @@ def main() -> None:
 
         extracted = extract_video(url, args.session)
         video = parse_video(item, extracted, city=args.city, llm_url=args.llm_url, use_llm=not args.no_llm, llm_debug=not args.quiet_llm)
+
+        inserted_places: set[str] = set()
         for place in video["place_candidates"][:1]:
             geo = geocode(place, args.city)
             if not geo:
                 continue
-            spot = {"place_name": place, "confidence": 0.9 if geo["geocode_score"] >= 90 else 0.7, **geo}
+            spot = {
+                "place_name": place,
+                "confidence": 0.9 if geo["geocode_score"] >= 90 else 0.7,
+                "source_type": "video_text",
+                "source_text": video["raw_text"][:500],
+                **geo,
+            }
             insert_record(conn, args.keyword, video, spot)
-            results.append({"video": video["url"], "title": video["title"], **spot})
+            inserted_places.add(place)
+            results.append({"video": video["url"], "title": video["title"], "fish_species": video.get("fish_species", []), **spot})
+
+        if args.include_comments:
+            try:
+                comment_clues = extract_comment_spot_clues(args.session, args.city, scrolls=args.comment_scrolls, wait_seconds=args.comment_wait)
+            except Exception as exc:
+                print(f"[warn] comment extraction failed for {url}: {exc}", file=sys.stderr, flush=True)
+                comment_clues = []
+            for clue in comment_clues:
+                for place in clue["place_candidates"]:
+                    if place in inserted_places:
+                        continue
+                    geo = geocode(place, args.city)
+                    if not geo or geo["geocode_score"] < 80:
+                        continue
+                    spot = {
+                        "place_name": place,
+                        "confidence": 0.65 if geo["geocode_score"] >= 90 else 0.5,
+                        "source_type": "comment",
+                        "source_text": clue["text"],
+                        **geo,
+                    }
+                    insert_record(conn, args.keyword, video, spot)
+                    inserted_places.add(place)
+                    results.append({"video": video["url"], "title": video["title"], "fish_species": video.get("fish_species", []), **spot})
         sleep_between_items(index, len(items), args.delay_min, args.delay_max)
     print(json.dumps({"inserted_spots": len(results), "results": results, "db": str(DB_PATH)}, ensure_ascii=False, indent=2))
 

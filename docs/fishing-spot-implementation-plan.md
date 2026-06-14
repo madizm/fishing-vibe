@@ -2,7 +2,7 @@
 
 ## 1. 项目目标
 
-通过 OpenCLI 搜索抖音「武汉钓鱼」相关视频，提取视频标题、URL、发布时间与地名信息，再调用天地图地理编码获取经纬度，形成可查询、可地图展示的钓点数据库。
+通过 OpenCLI 搜索抖音「武汉钓鱼」相关视频，提取视频标题、URL、发布时间、地名信息与鱼种信息，再调用天地图地理编码获取经纬度，形成可查询、可地图展示的钓点数据库。
 
 ## 2. 目标数据字段
 
@@ -15,6 +15,8 @@
 | author | 作者 |
 | publish_time | 发布时间 |
 | raw_text | 页面提取的原始文本 |
+| fish_species | 鱼种列表，如 `["黄尾", "鲫鱼"]` |
+| fish_species_source | 鱼种来源，如标题、文案、章节摘要、评论 |
 | place_name | 识别出的地名 / 钓点 |
 | query_name | 地理编码查询词，如「武汉东荆河」 |
 | longitude | 经度 |
@@ -30,9 +32,9 @@
 1. 使用 OpenCLI 以「武汉钓鱼」搜索抖音视频
 2. 获取视频列表和 URL
 3. 使用 opencli-browser 打开视频 URL
-4. 提取视频发布时间、标题、文案、地名相关信息
+4. 提取视频发布时间、标题、文案、地名和鱼种相关信息
 5. 使用 tianditu-geocode 根据地名查询经纬度
-6. 保存标题、发布时间、地名、经纬度等结构化数据
+6. 保存标题、发布时间、地名、鱼种、经纬度等结构化数据
 7. 后续支持地图查询、去重、热度排序
 ```
 
@@ -83,7 +85,48 @@ network 接口数据 > 页面结构化数据 > DOM 文本 > 截图/OCR
 - 评论中的地名作为后续增强
 - 模糊地名自动补城市前缀，例如「东荆河」→「武汉东荆河」
 
-### 4.4 天地图地理编码
+### 4.4 鱼种识别
+
+从标题、文案、章节摘要、标签和评论中提取鱼种信息。
+
+优先级：
+
+```text
+标题/文案明确鱼种 > 页面章节摘要 > 标签话题 > 评论补充 > 语音/字幕/OCR 后续增强
+```
+
+首版采用规则词典识别，后续可升级为 LLM/NLP 抽取。
+
+首版鱼种词典示例：
+
+| 标准鱼种 | 常见别名 / 文本命中 |
+|---|---|
+| 黄尾 | 黄尾、黄尾鲴 |
+| 青尾鲴 | 青尾、青尾鲴、青尾鲴鱼 |
+| 鲫鱼 | 鲫鱼、斤鲫 |
+| 鲤鱼 | 鲤鱼、巨鲤、大鲤鱼 |
+| 草鱼 | 草鱼 |
+| 鳊鱼 | 鳊鱼、武昌鱼 |
+| 翘嘴 | 翘嘴 |
+| 罗非 | 罗非、罗非鱼 |
+| 鲢鳙 | 鲢鳙、鲢鱼、鳙鱼 |
+| 鲮鱼 | 鲮鱼、小鲮鱼 |
+| 黑鱼 | 黑鱼、乌鱼 |
+| 鳜鱼 | 鳜鱼、桂鱼 |
+
+输出建议：
+
+```json
+{
+  "fish_species": ["黄尾"],
+  "fish_species_source": "title+chapter_summary",
+  "fish_confidence": 0.9
+}
+```
+
+注意：鱼种和钓点是多对多关系，同一视频可能出现多个鱼种；同一钓点也可能由多个视频累积出鱼种分布。
+
+### 4.5 天地图地理编码
 
 ```bash
 python .agents/skills/tianditu-geocode/tianditu_geocode.py geocode "武汉东荆河"
@@ -95,7 +138,7 @@ python .agents/skills/tianditu-geocode/tianditu_geocode.py geocode "武汉东荆
 TIANDITU_TK=你的天地图Key
 ```
 
-### 4.5 循环频率控制
+### 4.6 循环频率控制
 
 批量采集必须低频串行执行，避免触发平台风控或登录态失效。
 
@@ -117,13 +160,25 @@ python scripts/collect_douyin_fishing_spots.py \
   --delay-max 20
 ```
 
+启用评论区增强：
+
+```bash
+python scripts/collect_douyin_fishing_spots.py \
+  --keyword "武汉钓鱼" \
+  --limit 3 \
+  --include-comments \
+  --comment-scrolls 0 \
+  --delay-min 15 \
+  --delay-max 30
+```
+
 如需更保守，可调整为：
 
 ```bash
 python scripts/collect_douyin_fishing_spots.py --limit 10 --delay-min 30 --delay-max 60
 ```
 
-### 4.6 数据存储
+### 4.7 数据存储
 
 首版使用 SQLite。
 
@@ -147,6 +202,9 @@ CREATE TABLE fishing_spots (
   query_name TEXT,
   longitude REAL,
   latitude REAL,
+  fish_species TEXT,
+  fish_species_source TEXT,
+  fish_confidence REAL,
   geocode_score INTEGER,
   geocode_level TEXT,
   confidence REAL,
@@ -169,6 +227,7 @@ CREATE TABLE fishing_spots (
 | 6 | 数据入库 | SQLite 中保存 video 与 fishing_spot | 已完成 |
 | 7 | 批量化 | 对前 N 条视频循环执行流程 | 已编写脚本，验证受抖音登录态拦截 |
 | 8 | 频率控制 | 视频详情循环串行执行，并支持随机延迟参数 | 已完成 |
+| 9 | 鱼种识别 | 从视频标题/文案/章节摘要中识别至少 1 个鱼种 | 已完成首版规则识别 |
 
 ## 6. 当前跑通记录
 
@@ -187,6 +246,7 @@ CREATE TABLE fishing_spots (
   - 作者：`颜主任爱钓鱼`
   - 发布时间：`2026-06-11 17:28`
   - 地名候选：`东荆河`
+  - 鱼种候选：`黄尾`
   - 页面还包含章节摘要：`在东荆河钓黄尾的实战经验分享，包括钓点选择、饵料准备、钓具搭配和作钓技巧。`
 - 已执行天地图地理编码：`python .agents/skills/tianditu-geocode/tianditu_geocode.py geocode "武汉东荆河"`。
 - 地理编码结果：经度 `113.850442`，纬度 `30.200003`，score `100`，level `兴趣点`。
@@ -198,6 +258,13 @@ CREATE TABLE fishing_spots (
 - 批量脚本完整运行时，`opencli douyin search` 出现抖音登录态拦截：`AUTH_REQUIRED: Douyin search results are blocked behind a login wall`。处理方式：需在 Chrome 中确认/刷新抖音登录态，或先执行 `opencli douyin login` 后重试。
 - 重试命令：`python scripts/collect_douyin_fishing_spots.py --keyword "武汉钓鱼" --limit 3 --delay-min 8 --delay-max 20`。
 - 已为批量脚本增加循环频率控制：默认每条视频处理后随机暂停 `8-20` 秒，可通过 `--delay-min` / `--delay-max` 调整。
+- 已验证评论区位置线索采集能力：通过 `opencli browser` 可读取视频详情页可见评论、作者回复与「大家都在搜」。
+- 评论区测试样例中提取到位置线索：`东荆河黄尾钓点`、`汉江走马岭水厂 2.7的竿子就钓边边`、`去倒水河 发翘嘴了`、作者回复 `倒水河哪里，方便报位置吗`。
+- 已新增单视频评论探测脚本：`scripts/test_douyin_comment_spots.py`，支持打开视频、读取评论区可见文本、抽取疑似钓点、调用天地图地理编码。
+- 评论探测结果已保存：`data/douyin_comment_probe_result.json`。本次可用 geocode 候选包括 `东荆河`、`倒水河`；`汉江走马岭水厂` 有线索但天地图 score=64，需二次校验。
+- 已将评论增强合入主采集脚本：新增 `--include-comments`、`--comment-scrolls`、`--comment-wait` 参数；评论来源入库为 `source_type='comment'`，默认置信度低于视频正文来源。
+- 已扩展 `fishing_spots` 表：新增 `source_type` 字段，用于区分 `video_text` 与 `comment`。验证命令 `python scripts/collect_douyin_fishing_spots.py --keyword "武汉钓鱼 倒水河" --limit 1 --include-comments --delay-min 0 --delay-max 0 --no-llm --quiet-llm` 成功入库 `倒水河`。
+- 已新增鱼种识别优化：脚本增加 `FISH_PATTERNS` 规则词典，可从第一条视频识别鱼种 `黄尾`；`data/fishing_spot_sample.json` 和 SQLite `fishing_spots.fish_species` 已同步更新。
 
 ## 7. 风险与处理
 

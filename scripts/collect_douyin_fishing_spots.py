@@ -41,6 +41,17 @@ COMMENT_PLACE_HINTS = [
     "江", "河", "湖", "水库", "江滩", "闸", "桥", "泵站", "水厂", "码头", "村", "湾", "港", "沟", "渠", "公园",
 ]
 COMMENT_NOISE = {"全部评论", "留下你的精彩评论吧", "大家都在搜：", "分享", "回复", "作者", "加载中", "关注", "推荐视频"}
+LLM_TEXT_NOISE = {
+    "读屏标签已关闭", "精选", "推荐", "搜索", "关注", "朋友", "我的", "直播", "放映厅", "短剧", "小游戏",
+    "下载抖音精选", "播放", "进入全屏H", "网页全屏Y", "截图", "小窗模式U", "字幕", "不 开启", "不开启",
+    "稍后再看L", "倍速", "高清 1080P", "高清 720P", "智能", "清屏", "清屏J", "连播", "自动连播K",
+    "听抖音", "重播", "举报", "推荐视频", "点击按住可拖动视频", "3s 后播放", "3s 后播放下一个视频",
+    "3s 后循环播放当前视频", "全部评论", "留下你的精彩评论吧",
+}
+LLM_TEXT_KEEP_HINTS = [
+    "#", "钓", "鱼", "江", "河", "湖", "水库", "江滩", "闸", "桥", "泵站", "水厂", "码头", "村", "湾", "港",
+    "章节要点", "引言", "鱼情", "钓获", "发布时间", "作者", "粉丝", "获赞",
+]
 
 # Fish species aliases commonly appearing in Wuhan fishing videos.
 # Keys are canonical names persisted into DB; values are surface forms used by
@@ -182,6 +193,38 @@ def extract_comment_spot_clues(session: str, city: str, scrolls: int = 0, wait_s
         if places:
             clues.append({"text": line, "place_candidates": places})
     return clues
+
+
+def clean_text_for_llm(text: str, max_lines: int = 120) -> str:
+    """Strip Douyin page chrome/markdown noise before sending text to the LLM."""
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
+    text = re.sub(r"\[([^\]]{0,80})\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"https?://\S+|//www\.douyin\.com/\S+|data:image/\S+", "", text)
+    lines: list[str] = []
+    seen: set[str] = set()
+    for raw_line in re.split(r"\n+", text):
+        line = raw_line.strip(" \t-[]()（）")
+        line = re.sub(r"\s+", " ", line).strip()
+        line_plain = re.sub(r"^#+\s*", "", line).strip()
+        if line_plain == "推荐视频" or line_plain.startswith("合集"):
+            break
+        if not line or line in seen:
+            continue
+        seen.add(line)
+        if line_plain in LLM_TEXT_NOISE:
+            continue
+        if re.fullmatch(r"\d+", line) or re.fullmatch(r"\d{1,2}:\d{2}(?:\s*/\s*\d{1,2}:\d{2})?(?:\s*直播)?", line):
+            continue
+        if re.fullmatch(r"\d+(?:\.\d+)?x", line):
+            continue
+        if len(line) > 220 and not any(hint in line for hint in LLM_TEXT_KEEP_HINTS):
+            continue
+        if not any(hint in line for hint in LLM_TEXT_KEEP_HINTS) and len(line) <= 12:
+            continue
+        lines.append(line)
+        if len(lines) >= max_lines:
+            break
+    return "\n".join(lines)
 
 
 def _dedupe_places(places: list[str]) -> list[str]:
@@ -342,7 +385,8 @@ def parse_video(search_item: dict, extracted: dict, city: str = "武汉", llm_ur
     title = title or search_item.get("desc", "")
     m = re.search(r"发布时间：([0-9]{4}-[0-9]{2}-[0-9]{2}\s+[0-9]{2}:[0-9]{2})", content)
     publish_time = m.group(1) if m else ""
-    haystack = f"{title}\n{search_item.get('desc','')}\n{content[:5000]}"
+    cleaned_content = clean_text_for_llm(content)
+    haystack = f"{title}\n{search_item.get('desc','')}\n{cleaned_content[:5000]}"
     candidates = extract_places_with_llm(haystack, city, llm_url, debug=llm_debug) if use_llm else []
     fallback_candidates = [place for place in PLACE_PATTERNS if place in haystack]
     candidates = _dedupe_places([*candidates, *fallback_candidates])
@@ -361,7 +405,7 @@ def parse_video(search_item: dict, extracted: dict, city: str = "武汉", llm_ur
         "author": search_item.get("author", ""),
         "url": search_item.get("url", ""),
         "publish_time": publish_time,
-        "raw_text": content[:2000],
+        "raw_text": cleaned_content[:2000],
         "place_candidates": candidates,
         "fish_species": fish_species,
         "fish_species_source": fish_source,

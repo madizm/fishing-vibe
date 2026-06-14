@@ -439,6 +439,7 @@ def main() -> None:
     ap.add_argument("--quiet-llm", action="store_true", help="Disable LLM debug logs")
     ap.add_argument("--delay-min", type=float, default=8.0, help="Minimum sleep seconds between video detail requests")
     ap.add_argument("--delay-max", type=float, default=20.0, help="Maximum sleep seconds between video detail requests")
+    ap.add_argument("--max-video-places", type=int, default=3, help="Maximum video-text place candidates to geocode/save per video; 0 means all")
     ap.add_argument("--include-comments", action="store_true", help="Extract visible comment-area location clues as lower-confidence spot candidates")
     ap.add_argument("--comment-scrolls", type=int, default=0, help="How many times to scroll before reading comments")
     ap.add_argument("--comment-wait", type=float, default=2.0, help="Seconds to wait after each comment scroll")
@@ -450,6 +451,8 @@ def main() -> None:
 
     if args.delay_min < 0 or args.delay_max < args.delay_min:
         raise ValueError("--delay-max must be >= --delay-min and delays must be non-negative")
+    if args.max_video_places < 0:
+        raise ValueError("--max-video-places must be >= 0")
 
     results = []
     direct_url = args.url.strip()
@@ -469,7 +472,8 @@ def main() -> None:
         video = parse_video(item, extracted, city=args.city, llm_url=args.llm_url, use_llm=not args.no_llm, llm_debug=not args.quiet_llm)
 
         inserted_places: set[str] = set()
-        for place in video["place_candidates"][:1]:
+        video_places = video["place_candidates"] if args.max_video_places == 0 else video["place_candidates"][: args.max_video_places]
+        for place in video_places:
             geo = geocode(place, args.city)
             if not geo:
                 continue

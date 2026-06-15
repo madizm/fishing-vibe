@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-天地图地理编码 / 逆地理编码快速调用脚本。
-密钥从环境变量 TIANDITU_TK 或 .env 文件读取；不依赖第三方库。
+地理编码 / 逆地理编码统一脚本。
+支持百度地图（baidu）与天地图（tianditu）两个提供商。
+密钥从环境变量或 .env 文件读取，不依赖第三方库。
 """
 import argparse
 import json
@@ -13,9 +14,16 @@ import urllib.request
 from pathlib import Path
 from typing import Iterable, Optional
 
-BASE_URL = "http://api.tianditu.gov.cn/geocoder"
-ENV_KEY = "TIANDITU_TK"
 REQUEST_TIMEOUT = 15
+
+# 百度地图
+BAIDU_GEOCODE_URL = "https://api.map.baidu.com/geocoding/v3"
+BAIDU_REVERSE_URL = "https://api.map.baidu.com/reverse_geocoding/v3"
+BAIDU_ENV_KEY = "BAIDU_AK"
+
+# 天地图
+TIANDITU_BASE_URL = "http://api.tianditu.gov.cn/geocoder"
+TIANDITU_ENV_KEY = "TIANDITU_TK"
 
 
 def iter_env_candidates() -> Iterable[Path]:
@@ -49,18 +57,18 @@ def load_env_file() -> Optional[Path]:
     return None
 
 
-def get_tk() -> str:
-    """读取天地图 Key。显式环境变量优先，其次 .env。"""
+def get_env(key: str, name: str) -> str:
+    """读取指定密钥。显式环境变量优先，其次 .env。"""
     load_env_file()
-    tk = os.environ.get(ENV_KEY, "").strip()
-    if not tk:
+    val = os.environ.get(key, "").strip()
+    if not val:
         raise RuntimeError(
-            f"未找到天地图密钥。请设置环境变量 {ENV_KEY}，或在项目根目录 .env 中配置：{ENV_KEY}=你的天地图Key"
+            f"未找到 {name} 密钥。请设置环境变量 {key}，或在项目根目录 .env 中配置：{key}=..."
         )
-    return tk
+    return val
 
 
-def request_json(url: str) -> dict:
+def request_json(url: str, provider: str) -> dict:
     try:
         with urllib.request.urlopen(url, timeout=REQUEST_TIMEOUT) as response:
             return json.loads(response.read().decode("utf-8"))
@@ -68,31 +76,49 @@ def request_json(url: str) -> dict:
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"HTTP {exc.code}: {body}") from exc
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"请求天地图 API 失败：{exc.reason}") from exc
+        raise RuntimeError(f"请求 {provider} API 失败：{exc.reason}") from exc
     except json.JSONDecodeError as exc:
-        raise RuntimeError("天地图 API 返回的不是合法 JSON") from exc
+        raise RuntimeError(f"{provider} API 返回的不是合法 JSON") from exc
 
 
-def geocode(address: str, tk: str) -> dict:
-    """地理编码：地址 -> 经纬度。"""
+def baidu_geocode(address: str, ak: str) -> dict:
+    query = urllib.parse.urlencode({"address": address, "output": "json", "ak": ak})
+    return request_json(f"{BAIDU_GEOCODE_URL}?{query}", "百度地图")
+
+
+def baidu_reverse_geocode(lon: float, lat: float, ak: str) -> dict:
+    if not (-180 <= lon <= 180 and -90 <= lat <= 90):
+        raise ValueError("经纬度超出范围：lon 应在 [-180,180]，lat 应在 [-90,90]")
+    location = f"{lat},{lon}"
+    query = urllib.parse.urlencode({"location": location, "output": "json", "ak": ak})
+    return request_json(f"{BAIDU_REVERSE_URL}?{query}", "百度地图")
+
+
+def tianditu_geocode(address: str, tk: str) -> dict:
     ds = json.dumps({"keyWord": address}, ensure_ascii=False)
     query = urllib.parse.urlencode({"ds": ds, "tk": tk})
-    return request_json(f"{BASE_URL}?{query}")
+    return request_json(f"{TIANDITU_BASE_URL}?{query}", "天地图")
 
 
-def reverse_geocode(lon: float, lat: float, tk: str) -> dict:
-    """逆地理编码：经纬度 -> 地址。"""
+def tianditu_reverse_geocode(lon: float, lat: float, tk: str) -> dict:
     if not (-180 <= lon <= 180 and -90 <= lat <= 90):
         raise ValueError("经纬度超出范围：lon 应在 [-180,180]，lat 应在 [-90,90]")
     post_str = json.dumps({"lon": lon, "lat": lat, "ver": 1}, ensure_ascii=False)
     query = urllib.parse.urlencode({"postStr": post_str, "type": "geocode", "tk": tk})
-    return request_json(f"{BASE_URL}?{query}")
+    return request_json(f"{TIANDITU_BASE_URL}?{query}", "天地图")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="天地图地理编码 / 逆地理编码。密钥从 TIANDITU_TK 或 .env 读取。"
+        description="地理编码 / 逆地理编码。支持百度地图（baidu）与天地图（tianditu）。"
     )
+    parser.add_argument(
+        "--provider", "-p",
+        choices=["baidu", "tianditu"],
+        default="tianditu",
+        help="地图提供商（默认 tianditu）",
+    )
+
     subparsers = parser.add_subparsers(dest="command")
 
     p_geocode = subparsers.add_parser("geocode", help="地址/地名 -> 经纬度")
@@ -112,12 +138,21 @@ def main() -> None:
         parser.print_help()
         sys.exit(1)
 
+    provider = args.provider
+    if provider == "baidu":
+        key = get_env(BAIDU_ENV_KEY, "百度地图")
+        geocode_fn = baidu_geocode
+        reverse_fn = baidu_reverse_geocode
+    else:
+        key = get_env(TIANDITU_ENV_KEY, "天地图")
+        geocode_fn = tianditu_geocode
+        reverse_fn = tianditu_reverse_geocode
+
     try:
-        tk = get_tk()
         if args.command == "geocode":
-            result = geocode(args.address, tk)
+            result = geocode_fn(args.address, key)
         elif args.command == "reverse":
-            result = reverse_geocode(args.lon, args.lat, tk)
+            result = reverse_fn(args.lon, args.lat, key)
         else:
             parser.error(f"未知命令：{args.command}")
         print(json.dumps(result, ensure_ascii=False, indent=2))

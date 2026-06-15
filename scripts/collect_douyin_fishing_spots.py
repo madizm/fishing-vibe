@@ -5,7 +5,7 @@ Pipeline:
 1. opencli douyin search <keyword>
 2. opencli browser open/extract each video URL
 3. extract title, publish time, place candidates, fish species
-4. tianditu geocode
+4. baidu geocode
 5. insert into SQLite
 """
 
@@ -28,7 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = ROOT / "data" / "fishing_spots.sqlite"
-GEOCODE_SCRIPT = ROOT / ".agents" / "skills" / "tianditu-geocode" / "tianditu_geocode.py"
+GEOCODE_SCRIPT = ROOT / ".agents" / "skills" / "geocode" / "geocode.py"
 
 # Fallback tokens when the local OpenAI-compatible LLM is unavailable.
 # The primary extractor below asks the LLM to return place names from title/description/page text.
@@ -423,17 +423,19 @@ def sleep_between_items(index: int, total: int, delay_min: float, delay_max: flo
 
 def geocode(place: str, city: str = "武汉") -> dict | None:
     query = place if place.startswith(city) else f"{city}{place}"
-    out = run(["python", str(GEOCODE_SCRIPT), "geocode", query], timeout=60)
+    out = run(["python", str(GEOCODE_SCRIPT), "-p", "baidu", "geocode", query], timeout=60)
     data = json.loads(out)
-    if data.get("status") != "0" or "location" not in data:
+    # 百度地图返回 status 为整数 0
+    if data.get("status") != 0 or "result" not in data:
         return None
-    loc = data["location"]
+    result = data["result"]
+    loc = result["location"]
     return {
         "query_name": query,
-        "longitude": float(loc["lon"]),
+        "longitude": float(loc["lng"]),
         "latitude": float(loc["lat"]),
-        "geocode_score": int(loc.get("score", 0)),
-        "geocode_level": loc.get("level", ""),
+        "geocode_score": int(result.get("confidence", 0)),
+        "geocode_level": result.get("level", ""),
     }
 
 

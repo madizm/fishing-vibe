@@ -8,6 +8,7 @@ import argparse
 import json
 import os
 import sys
+import math
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -15,6 +16,111 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 REQUEST_TIMEOUT = 15
+
+# 坐标系常量
+PI = 3.1415926535897932384626
+X_PI = 3.14159265358979324 * 3000.0 / 180.0
+A = 6378245.0
+EE = 0.00669342162296594323
+
+def _transformlat(lng: float, lat: float) -> float:
+    ret = -100.0 + 2.0 * lng + 3.0 * lat + 0.2 * lat * lat + 0.1 * lng * lat + 0.2 * math.sqrt(abs(lng))
+    ret += (20.0 * math.sin(6.0 * lng * PI) + 20.0 * math.sin(2.0 * lng * PI)) * 2.0 / 3.0
+    ret += (20.0 * math.sin(lat * PI) + 40.0 * math.sin(lat / 3.0 * PI)) * 2.0 / 3.0
+    ret += (160.0 * math.sin(lat / 12.0 * PI) + 320.0 * math.sin(lat * PI / 30.0)) * 2.0 / 3.0
+    return ret
+
+
+def _transformlng(lng: float, lat: float) -> float:
+    ret = 300.0 + lng + 2.0 * lat + 0.1 * lng * lng + 0.1 * lng * lat + 0.1 * math.sqrt(abs(lng))
+    ret += (20.0 * math.sin(6.0 * lng * PI) + 20.0 * math.sin(2.0 * lng * PI)) * 2.0 / 3.0
+    ret += (20.0 * math.sin(lng * PI) + 40.0 * math.sin(lng / 3.0 * PI)) * 2.0 / 3.0
+    ret += (150.0 * math.sin(lng / 12.0 * PI) + 300.0 * math.sin(lng / 30.0 * PI)) * 2.0 / 3.0
+    return ret
+
+
+def bd09_to_gcj02(bd_lon: float, bd_lat: float) -> tuple[float, float]:
+    """BD09 -> GCJ02（火星坐标系）"""
+    x = bd_lon - 0.0065
+    y = bd_lat - 0.006
+    z = math.sqrt(x * x + y * y) - 0.00002 * math.sin(y * X_PI)
+    theta = math.atan2(y, x) - 0.000003 * math.cos(x * X_PI)
+    gcj_lon = z * math.cos(theta)
+    gcj_lat = z * math.sin(theta)
+    return gcj_lon, gcj_lat
+
+
+def gcj02_to_bd09(gcj_lon: float, gcj_lat: float) -> tuple[float, float]:
+    """GCJ02 -> BD09"""
+    z = math.sqrt(gcj_lon * gcj_lon + gcj_lat * gcj_lat) + 0.00002 * math.sin(gcj_lat * X_PI)
+    theta = math.atan2(gcj_lat, gcj_lon) + 0.000003 * math.cos(gcj_lon * X_PI)
+    bd_lon = z * math.cos(theta) + 0.0065
+    bd_lat = z * math.sin(theta) + 0.006
+    return bd_lon, bd_lat
+
+
+def gcj02_to_wgs84(gcj_lon: float, gcj_lat: float) -> tuple[float, float]:
+    """GCJ02 -> WGS84"""
+    dlat = _transformlat(gcj_lon - 105.0, gcj_lat - 35.0)
+    dlng = _transformlng(gcj_lon - 105.0, gcj_lat - 35.0)
+    radlat = gcj_lat / 180.0 * PI
+    magic = math.sin(radlat)
+    magic = 1 - EE * magic * magic
+    sqrtmagic = math.sqrt(magic)
+    dlat = (dlat * 180.0) / ((A * (1 - EE)) / (magic * sqrtmagic) * PI)
+    dlng = (dlng * 180.0) / (A / sqrtmagic * math.cos(radlat) * PI)
+    wgs_lat = gcj_lat - dlat
+    wgs_lon = gcj_lon - dlng
+    return wgs_lon, wgs_lat
+
+
+def wgs84_to_gcj02(wgs_lon: float, wgs_lat: float) -> tuple[float, float]:
+    """WGS84 -> GCJ02"""
+    dlat = _transformlat(wgs_lon - 105.0, wgs_lat - 35.0)
+    dlng = _transformlng(wgs_lon - 105.0, wgs_lat - 35.0)
+    radlat = wgs_lat / 180.0 * PI
+    magic = math.sin(radlat)
+    magic = 1 - EE * magic * magic
+    sqrtmagic = math.sqrt(magic)
+    dlat = (dlat * 180.0) / ((A * (1 - EE)) / (magic * sqrtmagic) * PI)
+    dlng = (dlng * 180.0) / (A / sqrtmagic * math.cos(radlat) * PI)
+    gcj_lat = wgs_lat + dlat
+    gcj_lon = wgs_lon + dlng
+    return gcj_lon, gcj_lat
+
+
+def bd09_to_wgs84(bd_lon: float, bd_lat: float) -> tuple[float, float]:
+    """BD09 -> WGS84"""
+    gcj_lon, gcj_lat = bd09_to_gcj02(bd_lon, bd_lat)
+    return gcj02_to_wgs84(gcj_lon, gcj_lat)
+
+
+def wgs84_to_bd09(wgs_lon: float, wgs_lat: float) -> tuple[float, float]:
+    """WGS84 -> BD09"""
+    gcj_lon, gcj_lat = wgs84_to_gcj02(wgs_lon, wgs_lat)
+    return gcj02_to_bd09(gcj_lon, gcj_lat)
+
+
+COORD_CONVERTERS = {
+    ("bd09", "gcj02"): bd09_to_gcj02,
+    ("gcj02", "bd09"): gcj02_to_bd09,
+    ("gcj02", "wgs84"): gcj02_to_wgs84,
+    ("wgs84", "gcj02"): wgs84_to_gcj02,
+    ("bd09", "wgs84"): bd09_to_wgs84,
+    ("wgs84", "bd09"): wgs84_to_bd09,
+}
+
+
+def convert_coords(lon: float, lat: float, from_sys: str, to_sys: str) -> tuple[float, float]:
+    """通用坐标转换入口。"""
+    f = from_sys.lower().strip()
+    t = to_sys.lower().strip()
+    if f == t:
+        return lon, lat
+    converter = COORD_CONVERTERS.get((f, t))
+    if converter is None:
+        raise ValueError(f"不支持的坐标转换：{from_sys} -> {to_sys}。支持：bd09, gcj02, wgs84")
+    return converter(lon, lat)
 
 # 百度地图
 BAIDU_GEOCODE_URL = "https://api.map.baidu.com/geocoding/v3"
@@ -110,7 +216,7 @@ def tianditu_reverse_geocode(lon: float, lat: float, tk: str) -> dict:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="地理编码 / 逆地理编码。支持百度地图（baidu）与天地图（tianditu）。"
+        description="地理编码 / 逆地理编码 / 坐标转换。支持百度地图（baidu）与天地图（tianditu）。"
     )
     parser.add_argument(
         "--provider", "-p",
@@ -123,10 +229,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_geocode = subparsers.add_parser("geocode", help="地址/地名 -> 经纬度")
     p_geocode.add_argument("address", help="要查询的地址、地名或 POI")
+    p_geocode.add_argument(
+        "--to", dest="to_coords",
+        choices=["bd09", "gcj02", "wgs84"],
+        help="输出坐标系（默认与提供商一致：baidu->bd09, tianditu->wgs84）",
+    )
 
     p_reverse = subparsers.add_parser("reverse", help="经纬度 -> 地址")
     p_reverse.add_argument("lon", type=float, help="经度")
     p_reverse.add_argument("lat", type=float, help="纬度")
+
+    p_convert = subparsers.add_parser("convert", help="坐标系转换（bd09 / gcj02 / wgs84）")
+    p_convert.add_argument("--from", dest="from_sys", required=True, choices=["bd09", "gcj02", "wgs84"], help="源坐标系")
+    p_convert.add_argument("--to", dest="to_sys", required=True, choices=["bd09", "gcj02", "wgs84"], help="目标坐标系")
+    p_convert.add_argument("coords", nargs="+", type=float, help="经纬度对，例如 116.3 40.1 116.4 40.2")
 
     return parser
 
@@ -137,6 +253,21 @@ def main() -> None:
     if not args.command:
         parser.print_help()
         sys.exit(1)
+
+    if args.command == "convert":
+        coords = args.coords
+        if len(coords) % 2 != 0:
+            parser.error("convert 命令需要成对的经纬度参数，例如 116.3 40.1")
+        results = []
+        for i in range(0, len(coords), 2):
+            lon, lat = coords[i], coords[i + 1]
+            new_lon, new_lat = convert_coords(lon, lat, args.from_sys, args.to_sys)
+            results.append({
+                "from": {"lon": lon, "lat": lat, "system": args.from_sys},
+                "to": {"lon": new_lon, "lat": new_lat, "system": args.to_sys},
+            })
+        print(json.dumps(results, ensure_ascii=False, indent=2))
+        sys.exit(0)
 
     provider = args.provider
     if provider == "baidu":
@@ -151,6 +282,9 @@ def main() -> None:
     try:
         if args.command == "geocode":
             result = geocode_fn(args.address, key)
+            # 自动坐标转换
+            if hasattr(args, "to_coords") and args.to_coords:
+                _apply_coords_transform(result, provider, args.to_coords)
         elif args.command == "reverse":
             result = reverse_fn(args.lon, args.lat, key)
         else:
@@ -159,6 +293,32 @@ def main() -> None:
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
+
+
+def _apply_coords_transform(result: dict, provider: str, to_sys: str) -> None:
+    """对地理编码结果中的坐标进行转换。"""
+    from_sys = "bd09" if provider == "baidu" else "wgs84"
+    to = to_sys.lower().strip()
+    if from_sys == to:
+        return
+    # 百度地图: result.location.lng / lat
+    if provider == "baidu" and "result" in result and "location" in result["result"]:
+        loc = result["result"]["location"]
+        lon = float(loc["lng"])
+        lat = float(loc["lat"])
+        new_lon, new_lat = convert_coords(lon, lat, from_sys, to)
+        loc["lng"] = new_lon
+        loc["lat"] = new_lat
+        result["_coord_system"] = to
+    # 天地图: location.lon / lat
+    elif provider == "tianditu" and "location" in result:
+        loc = result["location"]
+        lon = float(loc["lon"])
+        lat = float(loc["lat"])
+        new_lon, new_lat = convert_coords(lon, lat, from_sys, to)
+        loc["lon"] = new_lon
+        loc["lat"] = new_lat
+        result["_coord_system"] = to
 
 
 if __name__ == "__main__":

@@ -96,7 +96,65 @@ python3 geocode.py -p baidu reverse 116.308149542 40.056885091
 |------|------|
 | `--provider` / `-p` | 提供商：`baidu` 或 `tianditu`（默认 `tianditu`） |
 | `geocode <address>` | 地址/地名 → 经纬度 |
+| `geocode --to <system>` | 自动转换坐标系（`bd09`/`gcj02`/`wgs84`） |
 | `reverse <lon> <lat>` | 经纬度 → 地址 |
+| `convert --from <sys> --to <sys> <lon> <lat> ...` | 批量坐标转换 |
+
+---
+
+## 坐标系转换
+
+脚本内置 BD09 / GCJ02 / WGS84 三系互转，无需依赖第三方库。
+
+### 地理编码时自动转换
+
+百度地图默认返回 **BD09**，可在 `geocode` 时直接转换为 **WGS84**：
+
+```bash
+python3 geocode.py -p baidu geocode --to wgs84 "北京市海淀区上地十街10号"
+```
+
+返回示例：
+
+```json
+{
+  "status": 0,
+  "result": {
+    "location": {
+      "lng": 116.295624,
+      "lat": 40.049474
+    },
+    "precise": 1,
+    "confidence": 100
+  },
+  "_coord_system": "wgs84"
+}
+```
+
+> `geocode` 的 `--to` 参数只影响地理编码输出；`reverse` 不需要转换，因为输入坐标由用户指定。
+
+### 批量坐标转换
+
+```bash
+python3 geocode.py convert --from bd09 --to wgs84 116.308149542 40.056885091 116.4 40.1
+```
+
+输出：
+
+```json
+[
+  {
+    "from": {"lon": 116.308149542, "lat": 40.056885091, "system": "bd09"},
+    "to": {"lon": 116.295624, "lat": 40.049474, "system": "wgs84"}
+  }
+]
+```
+
+支持的坐标系：
+
+- `bd09` — 百度地图坐标系
+- `gcj02` — 火星坐标系（国测局坐标系）
+- `wgs84` — GPS 坐标系（天地图返回）
 
 ---
 
@@ -191,7 +249,7 @@ python3 geocode.py -p baidu reverse 116.308149542 40.056885091
 | 天地图返回参数格式错误 | 检查 `ds` / `postStr` 是否 URL 编码；脚本内部已自动编码 |
 | 返回无结果 | 增加省市区限定，使用更精确地址 |
 | 经纬度超范围 | 经度 `[-180,180]`，纬度 `[-90,90]` |
-| 坐标系说明 | 百度地图返回 BD09；天地图返回 WGS84；跨源对比时注意转换 |
+| 坐标系说明 | 百度地图默认返回 **BD09**；天地图返回 **WGS84**。可用 `--to wgs84` 或 `convert` 命令统一转换。 |
 
 ## 参考链接
 

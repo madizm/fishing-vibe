@@ -9,7 +9,7 @@
     latitude="{{latitude}}"
     scale="{{scale}}"
     markers="{{markers}}"
-    type="{{mapType}}"
+    enable-satellite="{{enableSatellite}}"
     show-location
     bindmarkertap="onMarkerTap"
   />

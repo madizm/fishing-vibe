@@ -29,8 +29,8 @@ Page({
     detailVisible: false,
     // 面板折叠（手机小屏时默认折叠列表）
     panelCollapsed: false,
-    // 地图类型：roadmap / satellite
-    mapType: 'roadmap',
+    // 卫星图开关
+    enableSatellite: false,
     mapTypeBtnText: '切换卫星图',
   },
 
@@ -101,10 +101,10 @@ Page({
   },
 
   onToggleMapType() {
-    const next = this.data.mapType === 'roadmap' ? 'satellite' : 'roadmap'
+    const next = !this.data.enableSatellite
     this.setData({
-      mapType: next,
-      mapTypeBtnText: next === 'roadmap' ? '切换卫星图' : '切换矢量图',
+      enableSatellite: next,
+      mapTypeBtnText: next ? '切换矢量图' : '切换卫星图',
     })
   },
 

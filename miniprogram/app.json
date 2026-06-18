@@ -9,6 +9,7 @@
     "navigationBarTextStyle": "white"
   },
   "style": "v2",
+  "lazyCodeLoading": "requiredComponents",
   "sitemapLocation": "sitemap.json",
   "permission": {
     "scope.userLocation": {

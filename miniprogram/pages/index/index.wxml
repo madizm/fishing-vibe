@@ -26,7 +26,7 @@
     <!-- 面板头部（点击折叠/展开） -->
     <view class="panel-header" bindtap="onTogglePanel">
       <view class="panel-title">
-        <text class="label-brand">武汉钓鱼钓点地图</text>
+        <text class="label-brand">寻鱼radar</text>
         <text class="summary">共 {{total}} 个 · 显示 {{visibleCount}} 个</text>
       </view>
       <text class="panel-arrow">{{panelCollapsed ? '▲' : '▼'}}</text>
@@ -37,13 +37,15 @@
 
       <!-- 搜索框 -->
       <view class="filter-row">
-        <input
-          class="input"
-          placeholder="搜索钓点 / 作者 / 鱼种"
-          value="{{searchQuery}}"
-          bindinput="onSearchInput"
-          confirm-type="search"
-        />
+        <view class="search-wrap">
+          <input
+            class="input"
+            placeholder="搜索钓点 / 作者 / 鱼种"
+            value="{{searchQuery}}"
+            bindinput="onSearchInput"
+            confirm-type="search"
+          />
+        </view>
       </view>
 
       <!-- 鱼种选择 -->
@@ -65,7 +67,7 @@
         <slider
           min="0" max="1" step="0.1"
           value="{{confidenceFilter}}"
-          activeColor="#157a54"
+          activeColor="#1565C0"
           bindchange="onConfidenceChange"
           bindchanging="onConfidenceChange"
         />

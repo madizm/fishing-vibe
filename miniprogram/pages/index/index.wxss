@@ -6,7 +6,7 @@
   width: 100%;
   height: 100vh;
   overflow: hidden;
-  background: #f4f7f6;
+  background: #0a1929;
 }
 
 /* ── 地图 ── */
@@ -30,7 +30,7 @@
 }
 .map-btn {
   background: rgba(255, 255, 255, 0.92);
-  color: #157a54;
+  color: #1565C0;
   font-size: 24rpx;
   font-weight: 500;
   padding: 10rpx 18rpx;
@@ -47,7 +47,7 @@
   right: 0;
   background: #ffffff;
   border-radius: 28rpx 28rpx 0 0;
-  box-shadow: 0 -4rpx 24rpx rgba(20, 35, 31, 0.14);
+  box-shadow: 0 -4rpx 24rpx rgba(10, 25, 41, 0.18);
   z-index: 20;
   max-height: 60vh;
   display: flex;
@@ -73,7 +73,7 @@
 .label-brand {
   font-size: 28rpx;
   font-weight: 500;
-  color: #157a54;
+  color: #1565C0;
 }
 .summary {
   font-size: 22rpx;
@@ -95,23 +95,32 @@
 /* ── 筛选行 ── */
 .filter-row {
   margin-bottom: 14rpx;
+  padding: 0 20rpx;
 }
-.input {
-  width: 100%;
-  background: #f4f7f6;
+.search-wrap {
+  display: flex;
+  align-items: center;
+  background: #f0f4f8;
+  border: 1rpx solid #c5d4e8;
   border-radius: 16rpx;
-  padding: 16rpx 20rpx;
-  font-size: 26rpx;
+  padding: 0 20rpx;
+  height: 72rpx;
+}
+.search-wrap .input {
+  flex: 1;
+  font-size: 28rpx;
   color: #14231f;
-  border: 1rpx solid #dbe5e1;
-  box-sizing: border-box;
+  background: transparent;
+  border: none;
+  padding: 0;
+  min-width: 0;
 }
 .picker-display {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #f4f7f6;
-  border: 1rpx solid #dbe5e1;
+  background: #f0f4f8;
+  border: 1rpx solid #c5d4e8;
   border-radius: 16rpx;
   padding: 16rpx 20rpx;
   font-size: 26rpx;
@@ -129,7 +138,7 @@
   margin-bottom: 4rpx;
 }
 .slider-value {
-  color: #157a54;
+  color: #1565C0;
   font-weight: 500;
 }
 
@@ -140,7 +149,7 @@
 }
 .spot-card {
   background: #ffffff;
-  border: 1rpx solid #dbe5e1;
+  border: 1rpx solid #e3eaf2;
   border-radius: 18rpx;
   padding: 20rpx;
   margin-bottom: 12rpx;
@@ -160,7 +169,7 @@
 }
 .spot-conf {
   font-size: 22rpx;
-  color: #157a54;
+  color: #1565C0;
   white-space: nowrap;
 }
 .spot-title-text {
@@ -184,14 +193,14 @@
 .tag {
   font-size: 22rpx;
   font-weight: 500;
-  color: #116642;
-  background: #e9f6ef;
+  color: #0D47A1;
+  background: #E3F2FD;
   padding: 4rpx 14rpx;
   border-radius: 999rpx;
 }
 .tag-gray {
   color: #596863;
-  background: #eef2f1;
+  background: #eceff1;
 }
 
 .empty-tip {
@@ -219,7 +228,7 @@
   z-index: 40;
   max-height: 75vh;
   overflow-y: auto;
-  box-shadow: 0 -4rpx 24rpx rgba(20, 35, 31, 0.18);
+  box-shadow: 0 -4rpx 24rpx rgba(10, 25, 41, 0.22);
 }
 .detail-close {
   position: absolute;
@@ -240,7 +249,7 @@
   display: flex;
   align-items: center;
   padding: 14rpx 0;
-  border-bottom: 1rpx solid #f0f4f2;
+  border-bottom: 1rpx solid #eef2f7;
 }
 .detail-row--col {
   flex-direction: column;
@@ -265,7 +274,7 @@
 }
 .copy-btn {
   margin-top: 28rpx;
-  background: #157a54;
+  background: #1565C0;
   color: #ffffff;
   font-size: 28rpx;
   font-weight: 500;

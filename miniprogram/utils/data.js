@@ -60,7 +60,7 @@ function spotsToMarkers(spots) {
     height: 32,
     callout: {
       content: spot.place_name,
-      color: '#14231f',
+      color: '#0a1929',
       fontSize: 13,
       borderRadius: 6,
       bgColor: '#ffffff',

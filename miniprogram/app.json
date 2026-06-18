@@ -4,8 +4,8 @@
   ],
   "window": {
     "backgroundTextStyle": "light",
-    "navigationBarBackgroundColor": "#157a54",
-    "navigationBarTitleText": "武汉钓鱼钓点地图",
+    "navigationBarBackgroundColor": "#1565C0",
+    "navigationBarTitleText": "寻鱼radar",
     "navigationBarTextStyle": "white"
   },
   "style": "v2",

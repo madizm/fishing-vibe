@@ -115,6 +115,22 @@ def convert_coords(lon: float, lat: float, from_sys: str, to_sys: str) -> tuple[
         dlng = (dlng * 180.0) / (A / sqrtmagic * math.cos(radlat) * PI)
         return gcj_lon - dlng, gcj_lat - dlat
 
+    def wgs84_to_gcj02(wgs_lon, wgs_lat):
+        dlat = _transformlat(wgs_lon - 105.0, wgs_lat - 35.0)
+        dlng = _transformlng(wgs_lon - 105.0, wgs_lat - 35.0)
+        radlat = wgs_lat / 180.0 * PI
+        magic = math.sin(radlat)
+        magic = 1 - EE * magic * magic
+        sqrtmagic = math.sqrt(magic)
+        dlat = (dlat * 180.0) / ((A * (1 - EE)) / (magic * sqrtmagic) * PI)
+        dlng = (dlng * 180.0) / (A / sqrtmagic * math.cos(radlat) * PI)
+        return wgs_lon + dlng, wgs_lat + dlat
+
+    def gcj02_to_bd09(gcj_lon, gcj_lat):
+        z = math.sqrt(gcj_lon * gcj_lon + gcj_lat * gcj_lat) + 0.00002 * math.sin(gcj_lat * X_PI)
+        theta = math.atan2(gcj_lat, gcj_lon) + 0.000003 * math.cos(gcj_lon * X_PI)
+        return z * math.cos(theta) + 0.0065, z * math.sin(theta) + 0.006
+
     f = from_sys.lower().strip()
     t = to_sys.lower().strip()
     if f == t:
@@ -122,6 +138,14 @@ def convert_coords(lon: float, lat: float, from_sys: str, to_sys: str) -> tuple[
     if f == "bd09" and t == "wgs84":
         gcj_lon, gcj_lat = bd09_to_gcj02(lon, lat)
         return gcj02_to_wgs84(gcj_lon, gcj_lat)
+    if f == "bd09" and t == "gcj02":
+        return bd09_to_gcj02(lon, lat)
+    if f == "gcj02" and t == "wgs84":
+        return gcj02_to_wgs84(lon, lat)
+    if f == "wgs84" and t == "gcj02":
+        return wgs84_to_gcj02(lon, lat)
+    if f == "gcj02" and t == "bd09":
+        return gcj02_to_bd09(lon, lat)
     if f == "wgs84" and t == "bd09":
         # WGS84 -> GCJ02 -> BD09
         dlat = _transformlat(lon - 105.0, lat - 35.0)

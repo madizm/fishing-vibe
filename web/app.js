@@ -86,6 +86,7 @@ function markerHtml(spot) {
     <p><b>经纬度：</b>${spot.lng.toFixed(6)}, ${spot.lat.toFixed(6)}</p>
     <p><b>地理编码：</b>${escapeHtml(spot.geocode_level || '-')} / score ${spot.geocode_score ?? '-'}</p>
     <p><b>可信度：</b>${spot.confidence ?? '-'}</p>
+    <p><b>钓点评分：</b>${spot.quality_score ?? '-'} ${spot.quality_score_source ? `(${escapeHtml(spot.quality_score_source)})` : ''}</p>
     <p><b>鱼种：</b></p><div class="tags">${fish}</div>
     <p><b>视频：</b>${escapeHtml(spot.title || '-')}</p>
     <p><b>作者：</b>${escapeHtml(spot.author || '-')}　<b>发布：</b>${escapeHtml(spot.publish_time || '-')}</p>
@@ -131,7 +132,7 @@ function renderList() {
   state.filtered.forEach((spot) => {
     const li = document.createElement('li');
     li.className = 'spot-card';
-    li.innerHTML = `<div class="spot-title"><span>${escapeHtml(spot.place_name)}</span><span class="score">可信度 ${spot.confidence ?? '-'}</span></div>
+    li.innerHTML = `<div class="spot-title"><span>${escapeHtml(spot.place_name)}</span><span class="score">评分 ${spot.quality_score ?? '-'} / 可信度 ${spot.confidence ?? '-'}</span></div>
       <div class="meta">${escapeHtml(spot.title || '无标题')}</div>
       <div class="tags">${(spot.fish_species || []).map((f) => `<span class="tag">${escapeHtml(f)}</span>`).join('') || '<span class="tag gray">鱼种待补充</span>'}</div>`;
     li.addEventListener('click', () => openSpot(spot));

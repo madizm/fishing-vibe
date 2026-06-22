@@ -92,6 +92,7 @@ def export(db_path: Path, out_path: Path) -> dict[str, Any]:
           s.id, s.video_id, s.place_name, s.query_name, s.longitude, s.latitude,
           s.geocode_score, s.geocode_level, s.confidence, s.source_text, s.created_at,
           s.fish_species, s.fish_species_source, s.fish_confidence,
+          s.quality_score, s.quality_score_source, s.quality_score_detail,
           v.platform, v.keyword, v.title, v.url, v.author, v.publish_time, v.collected_at
         FROM fishing_spots s
         LEFT JOIN videos v ON v.id = s.video_id
@@ -130,6 +131,9 @@ def export(db_path: Path, out_path: Path) -> dict[str, Any]:
                     "fish_species": species,
                     "fish_species_source": source,
                     "fish_confidence": fish_confidence,
+                    "quality_score": item.get("quality_score"),
+                    "quality_score_source": item.get("quality_score_source") or "",
+                    "quality_score_detail": item.get("quality_score_detail") or "",
                     "title": item.get("title") or "",
                     "author": item.get("author") or "",
                     "url": item.get("url") or "",

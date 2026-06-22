@@ -23,7 +23,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -121,6 +121,24 @@ def init_db(conn: sqlite3.Connection) -> None:
       created_at TEXT,
       FOREIGN KEY(video_id) REFERENCES videos(id)
     )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS video_comments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      video_id INTEGER,
+      author TEXT,
+      text TEXT,
+      comment_time TEXT,
+      comment_time_raw TEXT,
+      comment_time_standard TEXT,
+      ip_location TEXT,
+      is_author INTEGER DEFAULT 0,
+      raw_json TEXT,
+      collected_at TEXT,
+      UNIQUE(video_id, author, text, comment_time_raw),
+      FOREIGN KEY(video_id) REFERENCES videos(id)
+    )""")
+    # No separate comment_quality_scores table: normalized comment quality is
+    # written directly onto fishing_spots. Drop the legacy derived table if it exists.
+    conn.execute("DROP TABLE IF EXISTS comment_quality_scores")
     columns = {row[1] for row in conn.execute("PRAGMA table_info(fishing_spots)")}
     if "fish_species" not in columns:
         conn.execute("ALTER TABLE fishing_spots ADD COLUMN fish_species TEXT")
@@ -130,6 +148,12 @@ def init_db(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE fishing_spots ADD COLUMN fish_confidence REAL")
     if "source_type" not in columns:
         conn.execute("ALTER TABLE fishing_spots ADD COLUMN source_type TEXT")
+    if "quality_score" not in columns:
+        conn.execute("ALTER TABLE fishing_spots ADD COLUMN quality_score REAL")
+    if "quality_score_source" not in columns:
+        conn.execute("ALTER TABLE fishing_spots ADD COLUMN quality_score_source TEXT")
+    if "quality_score_detail" not in columns:
+        conn.execute("ALTER TABLE fishing_spots ADD COLUMN quality_score_detail TEXT")
     conn.execute("UPDATE fishing_spots SET source_type='video_text' WHERE source_type IS NULL OR source_type='' ")
 
 
@@ -147,6 +171,160 @@ def extract_video(url: str, session: str) -> dict:
 def browser_eval(session: str, js: str) -> object:
     out = run(["opencli", "browser", session, "eval", js], timeout=90)
     return json.loads(out)
+
+
+def _days_in_month(year: int, month: int) -> int:
+    if month == 12:
+        next_month = datetime(year + 1, 1, 1)
+    else:
+        next_month = datetime(year, month + 1, 1)
+    return (next_month - timedelta(days=1)).day
+
+
+def _shift_months(dt: datetime, months: int) -> datetime:
+    month_index = dt.month - 1 + months
+    year = dt.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(dt.day, _days_in_month(year, month))
+    return dt.replace(year=year, month=month, day=day)
+
+
+def parse_douyin_comment_time(value: str, now: datetime | None = None) -> str:
+    """Parse Douyin's approximate comment time into YYYY-MM-DD HH:MM:SS.
+
+    Relative times such as "1周前" and "8月前" are approximate: weeks use
+    7-day deltas, while months/years use calendar month shifts with day clamping.
+    """
+    now = now or datetime.now()
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    text = text.split("·", 1)[0].strip()
+    if not text:
+        return ""
+
+    if text == "刚刚":
+        return now.strftime("%Y-%m-%d %H:%M:%S")
+
+    relative_units = [
+        (r"^(\d+)分钟前$", lambda n: now - timedelta(minutes=n)),
+        (r"^(\d+)小时前$", lambda n: now - timedelta(hours=n)),
+        (r"^(\d+)天前$", lambda n: now - timedelta(days=n)),
+        (r"^(\d+)周前$", lambda n: now - timedelta(weeks=n)),
+        (r"^(\d+)月前$", lambda n: _shift_months(now, -n)),
+        (r"^(\d+)年前$", lambda n: _shift_months(now, -12 * n)),
+    ]
+    for pattern, convert in relative_units:
+        m = re.fullmatch(pattern, text)
+        if m:
+            return convert(int(m.group(1))).strftime("%Y-%m-%d %H:%M:%S")
+
+    m = re.fullmatch(r"^(今天|昨天)(?:\s+(\d{1,2}:\d{2}))?$", text)
+    if m:
+        base = now.date() - timedelta(days=1 if m.group(1) == "昨天" else 0)
+        hh, mm = (m.group(2) or now.strftime("%H:%M")).split(":")
+        return datetime(base.year, base.month, base.day, int(hh), int(mm)).strftime("%Y-%m-%d %H:%M:%S")
+
+    m = re.fullmatch(r"^(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2}:\d{2}))?$", text)
+    if m:
+        hh, mm = (m.group(4) or "00:00").split(":")
+        return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), int(hh), int(mm)).strftime("%Y-%m-%d %H:%M:%S")
+
+    m = re.fullmatch(r"^(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2}:\d{2}))?$", text)
+    if m:
+        hh, mm = (m.group(3) or "00:00").split(":")
+        parsed = datetime(now.year, int(m.group(1)), int(m.group(2)), int(hh), int(mm))
+        if parsed > now:
+            parsed = parsed.replace(year=parsed.year - 1)
+        return parsed.strftime("%Y-%m-%d %H:%M:%S")
+
+    return ""
+
+
+def extract_video_comments(session: str, scrolls: int = 0, wait_seconds: float = 2.0, max_comments: int = 100) -> list[dict]:
+    """Extract visible Douyin video comments with their visible comment time.
+
+    The Douyin DOM uses generated class names, so this method anchors on comment
+    metadata time spans (e.g. "6小时前·湖北") and parses the nearest comment block.
+    It returns visible top-level comments and visible replies currently loaded in
+    the browser session.
+    """
+    if max_comments < 0:
+        raise ValueError("max_comments must be >= 0")
+    if max_comments == 0:
+        return []
+    for _ in range(scrolls):
+        run(["opencli", "browser", session, "scroll", "down", "--amount", "1200"], timeout=60)
+        if wait_seconds:
+            time.sleep(wait_seconds)
+    js = f"""(() => {{
+      const maxComments = {max_comments};
+      const timeRe = /^(?:刚刚|\\d+分钟前|\\d+小时前|\\d+天前|\\d+周前|\\d+月前|\\d+年前|昨天|今天|\\d{{1,2}}-\\d{{1,2}}|\\d{{4}}-\\d{{1,2}}-\\d{{1,2}})(?:\\s+\\d{{1,2}}:\\d{{2}})?(?:·[^\\n]+)?$/;
+      const noise = new Set(['...', '作者赞过', '置顶', '分享', '回复']);
+      const normalize = (s) => String(s || '').replace(/[\\u200b\\ufeff]/g, '').replace(/\\s+/g, ' ').trim();
+      const parseTime = (value) => {{
+        const text = normalize(value);
+        const m = text.match(/^(.*?)(?:·(.+))?$/);
+        return {{ raw: text, time: normalize(m && m[1] || text), ip: normalize(m && m[2] || '') }};
+      }};
+      const spans = Array.from(document.querySelectorAll('span'))
+        .filter((span) => timeRe.test(normalize(span.innerText || span.textContent || '')));
+      const records = [];
+      const seen = new Set();
+      for (const span of spans) {{
+        const block = span.parentElement && span.parentElement.parentElement;
+        if (!block) continue;
+        const lines = (block.innerText || '')
+          .split(/\\n+/)
+          .map(normalize)
+          .filter(Boolean);
+        const timeText = normalize(span.innerText || span.textContent || '');
+        const timeIndex = lines.findIndex((line) => line === timeText);
+        if (timeIndex <= 0) continue;
+        let before = lines.slice(0, timeIndex).filter((line) => !noise.has(line));
+        const isAuthor = before.includes('作者');
+        before = before.filter((line) => line !== '作者');
+        const author = before.shift() || '';
+        const text = normalize(before.join(''));
+        if (!author || !text || text.length > 500) continue;
+        const parsedTime = parseTime(timeText);
+        const key = author + '|' + text + '|' + parsedTime.raw;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        records.push({{
+          author,
+          text,
+          comment_time: parsedTime.time,
+          comment_time_raw: parsedTime.raw,
+          ip_location: parsedTime.ip,
+          is_author: isAuthor,
+        }});
+        if (records.length >= maxComments) break;
+      }}
+      return records;
+    }})()"""
+    # opencli browser eval is more reliable with one-line expressions.
+    js = " ".join(line.strip() for line in js.splitlines())
+    data = browser_eval(session, js)
+    comments = data if isinstance(data, list) else []
+    normalized: list[dict] = []
+    parsed_at = datetime.now()
+    for item in comments:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text", "")).strip()
+        if not text:
+            continue
+        comment_time_raw = str(item.get("comment_time_raw", "")).strip()
+        comment_time = str(item.get("comment_time", "")).strip()
+        normalized.append({
+            "author": str(item.get("author", "")).strip(),
+            "text": text,
+            "comment_time": comment_time,
+            "comment_time_raw": comment_time_raw,
+            "comment_time_standard": parse_douyin_comment_time(comment_time_raw or comment_time, now=parsed_at),
+            "ip_location": str(item.get("ip_location", "")).strip(),
+            "is_author": bool(item.get("is_author", False)),
+        })
+    return normalized
 
 
 def is_comment_candidate(line: str) -> bool:
@@ -178,20 +356,23 @@ def extract_comment_place_names(line: str, city: str) -> list[str]:
 
 
 def extract_comment_spot_clues(session: str, city: str, scrolls: int = 0, wait_seconds: float = 2.0) -> list[dict]:
-    for _ in range(scrolls):
-        run(["opencli", "browser", session, "scroll", "down", "--amount", "1200"], timeout=60)
-        if wait_seconds:
-            time.sleep(wait_seconds)
-    js = "(() => { const text = document.body.innerText || ''; const start = text.indexOf('全部评论'); const endMarks = ['下载客户端，桌面快捷访问', '广告投放', '用户服务协议']; let end = text.length; for (const mark of endMarks) { const idx = text.indexOf(mark, start >= 0 ? start : 0); if (idx > 0) end = Math.min(end, idx); } const slice = start >= 0 ? text.slice(start, end) : ''; return slice.split(/\\n+/).map(s => s.trim()).filter(Boolean); })()"
-    data = browser_eval(session, js)
-    lines = [str(x) for x in data] if isinstance(data, list) else []
+    comments = extract_video_comments(session, scrolls=scrolls, wait_seconds=wait_seconds, max_comments=200)
     clues: list[dict] = []
-    for line in lines:
+    for comment in comments:
+        line = comment["text"]
         if not is_comment_candidate(line):
             continue
         places = extract_comment_place_names(line, city)
         if places:
-            clues.append({"text": line, "place_candidates": places})
+            clues.append({
+                "text": line,
+                "author": comment.get("author", ""),
+                "comment_time": comment.get("comment_time", ""),
+                "comment_time_raw": comment.get("comment_time_raw", ""),
+                "comment_time_standard": comment.get("comment_time_standard", ""),
+                "ip_location": comment.get("ip_location", ""),
+                "place_candidates": places,
+            })
     return clues
 
 
@@ -320,6 +501,171 @@ def extract_places_with_llm(text: str, city: str, llm_url: str = DEFAULT_LLM_URL
     return places
 
 
+def format_comments_for_llm(comments: list[dict], max_chars: int = 8000, start_index: int = 1) -> str:
+    lines: list[str] = []
+    total = 0
+    for index, comment in enumerate(comments, start=start_index):
+        text = re.sub(r"\s+", " ", str(comment.get("text", "")).strip())
+        if not text:
+            continue
+        author = str(comment.get("author", "")).strip() or "匿名"
+        comment_time = comment.get("comment_time_standard") or comment.get("comment_time_raw") or comment.get("comment_time") or ""
+        line = f"[{index}] {author} {comment_time}: {text}"
+        if total + len(line) > max_chars:
+            break
+        lines.append(line)
+        total += len(line)
+    return "\n".join(lines)
+
+
+def extract_comment_places_with_llm(comments: list[dict], city: str, llm_url: str = DEFAULT_LLM_URL, debug: bool = True) -> list[dict]:
+    if not comments:
+        return []
+    prompt = f"""从下面抖音钓鱼视频评论中提取评论明确提到的实际钓点/地名。
+要求：
+- 只返回 JSON 数组，每项格式：{{"place_name":"东湖","comment_indexes":[7],"evidence":"东湖有个地方特别多","confidence":0.8}}
+- 地名必须来自评论文本，不要根据视频标题或常识补全
+- 优先提取河流、湖泊、水库、公园、桥、闸、江滩、村、湾、港等可地理编码地点
+- 如果评论把地名和鱼种/鱼情连在一起，也要拆出地名，例如“月湖大翘嘴”应返回“月湖”
+- 不要返回泛词（这里、那里、钓点、位置、免费停车场）、人名、鱼种、装备、城市名本身
+- comment_indexes 使用评论前的方括号编号
+- 若无明确地点返回 []
+- 城市上下文：{city}
+
+评论：
+{format_comments_for_llm(comments)}"""
+    parsed = _chat_json_array_with_llm(prompt, llm_url, debug, "comment-place", "你是评论地名抽取器，只输出合法 JSON，不要解释。")
+    clues: list[dict] = []
+    seen: set[str] = set()
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        place = item.get("place_name") or item.get("place") or item.get("地点") or item.get("钓点")
+        if not isinstance(place, str):
+            continue
+        places = _dedupe_places([place])
+        if not places:
+            continue
+        place = places[0]
+        if place in seen:
+            continue
+        seen.add(place)
+        indexes = item.get("comment_indexes") or item.get("comment_ids") or item.get("indexes") or []
+        if not isinstance(indexes, list):
+            indexes = []
+        clean_indexes: list[int] = []
+        for value in indexes:
+            try:
+                idx = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= idx <= len(comments) and idx not in clean_indexes:
+                clean_indexes.append(idx)
+        try:
+            confidence = float(item.get("confidence", 0.75))
+        except (TypeError, ValueError):
+            confidence = 0.75
+        evidence = str(item.get("evidence") or item.get("source_text") or "").strip()
+        if not evidence and clean_indexes:
+            evidence = "；".join(str(comments[i - 1].get("text", "")) for i in clean_indexes[:3])
+        clues.append({
+            "place_name": place,
+            "comment_indexes": clean_indexes,
+            "comment_ids": [comments[i - 1].get("comment_id") for i in clean_indexes if comments[i - 1].get("comment_id")],
+            "evidence": evidence,
+            "confidence": max(0.0, min(confidence, 1.0)),
+        })
+    log_llm_debug(f"comment-place clues={clues}", debug)
+    return clues
+
+
+def score_comment_quality_groups_with_llm(
+    comments: list[dict],
+    group_size: int = 5,
+    llm_url: str = DEFAULT_LLM_URL,
+    debug: bool = True,
+) -> list[dict]:
+    """Score fishing-spot quality from comment groups; one LLM call per group."""
+    if not comments or group_size <= 0:
+        return []
+    scores: list[dict] = []
+    for start in range(0, len(comments), group_size):
+        group = comments[start : start + group_size]
+        group_index = start // group_size + 1
+        group_text = format_comments_for_llm(group, start_index=start + 1)
+        prompt = f"""请根据下面这一组抖音钓鱼视频评论，给评论反映的“钓点质量”打分。
+评分标准：1=很差/禁钓/无鱼/不建议，2=偏差，3=一般或信息不足，4=较好，5=很好/鱼情好/交通停车方便/可钓性强。
+要求：
+- 只返回 JSON 数组，且只有 1 项：例如 [{{"score_1_5":4,"confidence":0.7,"summary":"鱼情还行且可钓","evidence":"已验证，可以钓鱼"}}]
+- score_1_5 必须是 1 到 5 的原始评分；程序会归一化到 0 到 1 后写入钓点评分
+- 只能依据评论内容，不要根据视频标题或常识推测
+- 如果这一组没有任何钓点质量信息，score_1_5 返回 3，confidence 不高于 0.3，并说明“信息不足”
+- evidence 摘录关键评论，summary 简短中文概括
+
+评论组（全局评论编号）：
+{group_text}"""
+        parsed = _chat_json_array_with_llm(prompt, llm_url, debug, f"comment-quality-{group_index}", "你是钓点评价分析器，只输出合法 JSON，不要解释。")
+        item = parsed[0] if parsed and isinstance(parsed[0], dict) else {}
+        try:
+            raw_score = float(item.get("score_1_5", item.get("score", 3)))
+        except (TypeError, ValueError):
+            raw_score = 3.0
+        raw_score = max(1.0, min(raw_score, 5.0))
+        try:
+            confidence = float(item.get("confidence", 0.3))
+        except (TypeError, ValueError):
+            confidence = 0.3
+        scores.append({
+            "group_index": group_index,
+            "comment_ids": [c.get("comment_id") for c in group if c.get("comment_id")],
+            "score_1_5": raw_score,
+            "normalized_score": normalize_quality_score(raw_score),
+            "confidence": max(0.0, min(confidence, 1.0)),
+            "summary": str(item.get("summary") or "").strip(),
+            "evidence": str(item.get("evidence") or "").strip(),
+        })
+    log_llm_debug(f"comment-quality scores={scores}", debug)
+    return scores
+
+
+def normalize_quality_score(score_1_5: float) -> float:
+    """Normalize a 1-5 fishing-spot quality score to 0-1."""
+    return max(0.0, min((float(score_1_5) - 1.0) / 4.0, 1.0))
+
+
+def aggregate_quality_scores(scores: list[dict], comment_ids: list[int] | None = None) -> dict:
+    """Weighted average of normalized comment quality scores.
+
+    If comment_ids are provided, only groups containing those comments are used.
+    Confidence is used as the weight and the result is already normalized to 0-1.
+    """
+    selected: list[dict] = []
+    wanted = {int(x) for x in (comment_ids or []) if x}
+    for item in scores:
+        ids = {int(x) for x in item.get("comment_ids", []) if x}
+        if wanted and not (wanted & ids):
+            continue
+        selected.append(item)
+    if not selected:
+        return {"quality_score": None, "confidence": 0.0, "detail": ""}
+    weighted_total = 0.0
+    weight_total = 0.0
+    details: list[str] = []
+    for item in selected:
+        confidence = max(float(item.get("confidence", 0.0)), 0.05)
+        normalized = float(item.get("normalized_score", normalize_quality_score(item.get("score_1_5", item.get("score", 3)))))
+        weighted_total += normalized * confidence
+        weight_total += confidence
+        details.append(
+            f"第{item.get('group_index')}组: raw={item.get('score_1_5', item.get('score'))}, norm={normalized:.2f}, conf={item.get('confidence')}, {item.get('summary', '')}"
+        )
+    return {
+        "quality_score": round(weighted_total / weight_total, 4) if weight_total else None,
+        "confidence": round(min(weight_total / len(selected), 1.0), 4) if selected else 0.0,
+        "detail": "；".join(details),
+    }
+
+
 def normalize_fish_species(values: list[str]) -> list[str]:
     species: list[str] = []
     for value in values:
@@ -443,17 +789,74 @@ def video_exists(conn: sqlite3.Connection, url: str) -> bool:
     return conn.execute("SELECT 1 FROM videos WHERE url=? LIMIT 1", (url,)).fetchone() is not None
 
 
-def insert_record(conn: sqlite3.Connection, keyword: str, video: dict, spot: dict) -> None:
+def upsert_video(conn: sqlite3.Connection, keyword: str, video: dict) -> int:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn.execute(
         """INSERT OR IGNORE INTO videos(platform, keyword, title, url, author, publish_time, raw_text, collected_at)
            VALUES('douyin',?,?,?,?,?,?,?)""",
         (keyword, video["title"], video["url"], video["author"], video["publish_time"], video["raw_text"], now),
     )
-    video_id = conn.execute("SELECT id FROM videos WHERE url=?", (video["url"],)).fetchone()[0]
+    row = conn.execute("SELECT id FROM videos WHERE url=?", (video["url"],)).fetchone()
+    if not row:
+        raise RuntimeError(f"failed to upsert video: {video['url']}")
+    return int(row[0])
+
+
+def existing_spot_names(conn: sqlite3.Connection, video_id: int) -> set[str]:
+    return {str(row[0]) for row in conn.execute("SELECT place_name FROM fishing_spots WHERE video_id=?", (video_id,)) if row[0]}
+
+
+def insert_video_comments(conn: sqlite3.Connection, video_id: int, comments: list[dict]) -> list[dict]:
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    saved: list[dict] = []
+    for comment in comments:
+        conn.execute(
+            """INSERT OR IGNORE INTO video_comments(video_id, author, text, comment_time, comment_time_raw, comment_time_standard, ip_location, is_author, raw_json, collected_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (
+                video_id,
+                comment.get("author", ""),
+                comment.get("text", ""),
+                comment.get("comment_time", ""),
+                comment.get("comment_time_raw", ""),
+                comment.get("comment_time_standard", ""),
+                comment.get("ip_location", ""),
+                1 if comment.get("is_author") else 0,
+                json.dumps(comment, ensure_ascii=False),
+                now,
+            ),
+        )
+        row = conn.execute(
+            """SELECT id FROM video_comments
+               WHERE video_id=? AND author=? AND text=? AND comment_time_raw=?""",
+            (video_id, comment.get("author", ""), comment.get("text", ""), comment.get("comment_time_raw", "")),
+        ).fetchone()
+        saved_comment = dict(comment)
+        if row:
+            saved_comment["comment_id"] = int(row[0])
+        saved.append(saved_comment)
+    return saved
+
+
+def apply_comment_quality_to_spots(conn: sqlite3.Connection, video_id: int, quality: dict) -> None:
+    """Write normalized comment quality score directly onto fishing_spots."""
+    quality_score = quality.get("quality_score")
+    if quality_score is None:
+        return
     conn.execute(
-        """INSERT INTO fishing_spots(video_id, place_name, query_name, longitude, latitude, fish_species, fish_species_source, fish_confidence, geocode_score, geocode_level, confidence, source_type, source_text, created_at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        """UPDATE fishing_spots
+           SET quality_score=?, quality_score_source=?, quality_score_detail=?
+           WHERE video_id=?""",
+        (quality_score, "comment_llm", quality.get("detail", ""), video_id),
+    )
+
+
+def insert_record(conn: sqlite3.Connection, keyword: str, video: dict, spot: dict) -> None:
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    video_id = upsert_video(conn, keyword, video)
+    conn.execute(
+        """INSERT INTO fishing_spots(video_id, place_name, query_name, longitude, latitude, fish_species, fish_species_source, fish_confidence, geocode_score, geocode_level, confidence, source_type, source_text, quality_score, quality_score_source, quality_score_detail, created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             video_id,
             spot["place_name"],
@@ -468,6 +871,9 @@ def insert_record(conn: sqlite3.Connection, keyword: str, video: dict, spot: dic
             spot["confidence"],
             spot.get("source_type", "video_text"),
             spot.get("source_text", video["raw_text"][:500]),
+            spot.get("quality_score"),
+            spot.get("quality_score_source", ""),
+            spot.get("quality_score_detail", ""),
             now,
         ),
     )
@@ -486,9 +892,11 @@ def main() -> None:
     ap.add_argument("--delay-min", type=float, default=8.0, help="Minimum sleep seconds between video detail requests")
     ap.add_argument("--delay-max", type=float, default=20.0, help="Maximum sleep seconds between video detail requests")
     ap.add_argument("--max-video-places", type=int, default=3, help="Maximum video-text place candidates to geocode/save per video; 0 means all")
-    ap.add_argument("--include-comments", action="store_true", help="Extract visible comment-area location clues as lower-confidence spot candidates")
+    ap.add_argument("--include-comments", action="store_true", help="Extract/save visible comments, run LLM comment spot extraction, and score comment quality")
     ap.add_argument("--comment-scrolls", type=int, default=0, help="How many times to scroll before reading comments")
     ap.add_argument("--comment-wait", type=float, default=2.0, help="Seconds to wait after each comment scroll")
+    ap.add_argument("--comment-max", type=int, default=100, help="Maximum visible comments to extract/save per video")
+    ap.add_argument("--comment-quality-group-size", type=int, default=5, help="LLM quality scoring group size for comments")
     args = ap.parse_args()
 
     DB_PATH.parent.mkdir(exist_ok=True)
@@ -499,8 +907,13 @@ def main() -> None:
         raise ValueError("--delay-max must be >= --delay-min and delays must be non-negative")
     if args.max_video_places < 0:
         raise ValueError("--max-video-places must be >= 0")
+    if args.comment_max < 0:
+        raise ValueError("--comment-max must be >= 0")
+    if args.comment_quality_group_size <= 0:
+        raise ValueError("--comment-quality-group-size must be > 0")
 
-    results = []
+    spot_results = []
+    comment_results = []
     direct_url = args.url.strip()
     items = [{"url": direct_url, "desc": "", "author": ""}] if direct_url else search(args.keyword, args.limit)
     for index, item in enumerate(items):
@@ -509,56 +922,114 @@ def main() -> None:
             print(f"[skip] missing url for item index={index}", file=sys.stderr, flush=True)
             sleep_between_items(index, len(items), args.delay_min, args.delay_max)
             continue
-        if video_exists(conn, url):
+        already_exists = video_exists(conn, url)
+        if already_exists and not args.include_comments:
             print(f"[skip] already in db: {url}", file=sys.stderr, flush=True)
             sleep_between_items(index, len(items), args.delay_min, args.delay_max)
             continue
+        if already_exists:
+            print(f"[info] already in db, refreshing comments only: {url}", file=sys.stderr, flush=True)
 
         extracted = extract_video(url, args.session)
         video = parse_video(item, extracted, city=args.city, llm_url=args.llm_url, use_llm=not args.no_llm, llm_debug=not args.quiet_llm)
+        video_id = upsert_video(conn, args.keyword, video)
+        if not video.get("title"):
+            row = conn.execute("SELECT title, author, publish_time, raw_text FROM videos WHERE id=?", (video_id,)).fetchone()
+            if row:
+                video["title"] = row[0] or video.get("title", "")
+                video["author"] = row[1] or video.get("author", "")
+                video["publish_time"] = row[2] or video.get("publish_time", "")
+                video["raw_text"] = row[3] or video.get("raw_text", "")
 
-        inserted_places: set[str] = set()
-        video_places = video["place_candidates"] if args.max_video_places == 0 else video["place_candidates"][: args.max_video_places]
-        for place in video_places:
-            geo = geocode(place, args.city)
-            if not geo:
-                continue
-            spot = {
-                "place_name": place,
-                "confidence": 0.9 if geo["geocode_score"] >= 90 else 0.7,
-                "source_type": "video_text",
-                "source_text": video["raw_text"][:500],
-                **geo,
-            }
-            insert_record(conn, args.keyword, video, spot)
-            inserted_places.add(place)
-            results.append({"video": video["url"], "title": video["title"], "fish_species": video.get("fish_species", []), **spot})
+        inserted_places: set[str] = existing_spot_names(conn, video_id)
+        if not already_exists:
+            video_places = video["place_candidates"] if args.max_video_places == 0 else video["place_candidates"][: args.max_video_places]
+            for place in video_places:
+                geo = geocode(place, args.city)
+                if not geo:
+                    continue
+                spot = {
+                    "place_name": place,
+                    "confidence": 0.9 if geo["geocode_score"] >= 90 else 0.7,
+                    "source_type": "video_text",
+                    "source_text": video["raw_text"][:500],
+                    **geo,
+                }
+                insert_record(conn, args.keyword, video, spot)
+                inserted_places.add(place)
+                spot_results.append({"video": video["url"], "title": video["title"], "fish_species": video.get("fish_species", []), **spot})
 
         if args.include_comments:
             try:
-                comment_clues = extract_comment_spot_clues(args.session, args.city, scrolls=args.comment_scrolls, wait_seconds=args.comment_wait)
+                comments = extract_video_comments(
+                    args.session,
+                    scrolls=args.comment_scrolls,
+                    wait_seconds=args.comment_wait,
+                    max_comments=args.comment_max,
+                )
+                comments = insert_video_comments(conn, video_id, comments)
+                if args.no_llm:
+                    comment_clues = []
+                    quality_groups = []
+                    video_quality = {"quality_score": None, "confidence": 0.0, "detail": ""}
+                else:
+                    comment_clues = extract_comment_places_with_llm(
+                        comments,
+                        args.city,
+                        llm_url=args.llm_url,
+                        debug=not args.quiet_llm,
+                    )
+                    quality_groups = score_comment_quality_groups_with_llm(
+                        comments,
+                        group_size=args.comment_quality_group_size,
+                        llm_url=args.llm_url,
+                        debug=not args.quiet_llm,
+                    )
+                    video_quality = aggregate_quality_scores(quality_groups)
+                    apply_comment_quality_to_spots(conn, video_id, video_quality)
             except Exception as exc:
-                print(f"[warn] comment extraction failed for {url}: {exc}", file=sys.stderr, flush=True)
+                print(f"[warn] comment extraction/LLM analysis failed for {url}: {exc}", file=sys.stderr, flush=True)
+                comments = []
                 comment_clues = []
+                quality_groups = []
+                video_quality = {"quality_score": None, "confidence": 0.0, "detail": ""}
             for clue in comment_clues:
-                for place in clue["place_candidates"]:
-                    if place in inserted_places:
-                        continue
-                    geo = geocode(place, args.city)
-                    if not geo or geo["geocode_score"] < 80:
-                        continue
-                    spot = {
-                        "place_name": place,
-                        "confidence": 0.65 if geo["geocode_score"] >= 90 else 0.5,
-                        "source_type": "comment",
-                        "source_text": clue["text"],
-                        **geo,
-                    }
-                    insert_record(conn, args.keyword, video, spot)
-                    inserted_places.add(place)
-                    results.append({"video": video["url"], "title": video["title"], "fish_species": video.get("fish_species", []), **spot})
+                place = clue.get("place_name", "")
+                if not place or place in inserted_places:
+                    continue
+                geo = geocode(place, args.city)
+                if not geo or geo["geocode_score"] < 80:
+                    continue
+                source_text = str(clue.get("evidence") or "").strip()
+                if clue.get("comment_ids"):
+                    source_text = f"{source_text}（comment_ids={json.dumps(clue['comment_ids'], ensure_ascii=False)}）"
+                place_quality = aggregate_quality_scores(quality_groups, clue.get("comment_ids") or [])
+                if place_quality.get("quality_score") is None:
+                    place_quality = video_quality
+                spot = {
+                    "place_name": place,
+                    "confidence": 0.65 if geo["geocode_score"] >= 90 else 0.5,
+                    "source_type": "comment_llm",
+                    "source_text": source_text,
+                    "quality_score": place_quality.get("quality_score"),
+                    "quality_score_source": "comment_llm" if place_quality.get("quality_score") is not None else "",
+                    "quality_score_detail": place_quality.get("detail", ""),
+                    **geo,
+                }
+                insert_record(conn, args.keyword, video, spot)
+                inserted_places.add(place)
+                spot_results.append({"video": video["url"], "title": video["title"], "fish_species": video.get("fish_species", []), **spot})
+            comment_results.append({
+                "video": video["url"],
+                "title": video["title"],
+                "saved_comments": len(comments),
+                "comment_place_clues": comment_clues,
+                "spot_quality_score": video_quality.get("quality_score"),
+                "spot_quality_detail": video_quality.get("detail", ""),
+                "comment_quality_groups": quality_groups,
+            })
         sleep_between_items(index, len(items), args.delay_min, args.delay_max)
-    print(json.dumps({"inserted_spots": len(results), "results": results, "db": str(DB_PATH)}, ensure_ascii=False, indent=2))
+    print(json.dumps({"inserted_spots": len(spot_results), "results": spot_results, "comment_results": comment_results, "db": str(DB_PATH)}, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

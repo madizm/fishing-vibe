@@ -160,17 +160,20 @@ python scripts/collect_douyin_fishing_spots.py \
   --delay-max 20
 ```
 
-启用评论区增强：
+评论区增强默认启用；如需调整评论滚动/节流：
 
 ```bash
 python scripts/collect_douyin_fishing_spots.py \
   --keyword "武汉钓鱼" \
   --limit 3 \
-  --include-comments \
   --comment-scrolls 0 \
   --delay-min 15 \
   --delay-max 30
 ```
+
+如需跳过评论抽取，可加 `--no-include-comments`。
+
+评论区会通过 LLM 额外抽取简洁关键词并入库，覆盖地名、鱼种、鱼情、水情、交通/停车、禁钓/管理、饵料/钓法、总体评价等类别；可用 `--comment-keyword-group-size` 调整每次 LLM 分析的评论数量。
 
 如需更保守，可调整为：
 
@@ -211,6 +214,21 @@ CREATE TABLE fishing_spots (
   source_text TEXT,
   created_at TEXT,
   FOREIGN KEY(video_id) REFERENCES videos(id)
+);
+
+CREATE TABLE comment_keywords (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  video_id INTEGER,
+  comment_id INTEGER,
+  keyword TEXT,
+  category TEXT,
+  confidence REAL,
+  evidence TEXT,
+  source TEXT,
+  created_at TEXT,
+  UNIQUE(comment_id, keyword, category),
+  FOREIGN KEY(video_id) REFERENCES videos(id),
+  FOREIGN KEY(comment_id) REFERENCES video_comments(id)
 );
 ```
 
@@ -263,8 +281,9 @@ CREATE TABLE fishing_spots (
 - 评论区测试样例中提取到位置线索：`东荆河黄尾钓点`、`汉江走马岭水厂 2.7的竿子就钓边边`、`去倒水河 发翘嘴了`、作者回复 `倒水河哪里，方便报位置吗`。
 - 已新增单视频评论探测脚本：`scripts/test_douyin_comment_spots.py`，支持打开视频、读取评论区可见文本、抽取疑似钓点、调用天地图地理编码。
 - 评论探测结果已保存：`data/douyin_comment_probe_result.json`。本次可用 geocode 候选包括 `东荆河`、`倒水河`；`汉江走马岭水厂` 有线索但天地图 score=64，需二次校验。
-- 已将评论增强合入主采集脚本：新增 `--include-comments`、`--comment-scrolls`、`--comment-wait` 参数；评论来源入库为 `source_type='comment'`，默认置信度低于视频正文来源。
-- 已扩展 `fishing_spots` 表：新增 `source_type` 字段，用于区分 `video_text` 与 `comment`。验证命令 `python scripts/collect_douyin_fishing_spots.py --keyword "武汉钓鱼 倒水河" --limit 1 --include-comments --delay-min 0 --delay-max 0 --no-llm --quiet-llm` 成功入库 `倒水河`。
+- 已将评论增强合入主采集脚本并设为默认行为：保留 `--include-comments`，新增 `--no-include-comments` 用于跳过评论；支持 `--comment-scrolls`、`--comment-wait` 参数；评论来源入库为 `source_type='comment'`，默认置信度低于视频正文来源。
+- 已新增 LLM 评论关键词抽取：新增 `comment_keywords` 表，按 `place`、`fish`、`fish_condition`、`water_condition`、`access`、`restriction`、`bait_method`、`quality` 分类保存短关键词；输出中增加 `comment_keywords` 和 `comment_keyword_summary`。
+- 已扩展 `fishing_spots` 表：新增 `source_type` 字段，用于区分 `video_text` 与 `comment`。验证命令 `python scripts/collect_douyin_fishing_spots.py --keyword "武汉钓鱼 倒水河" --limit 1 --delay-min 0 --delay-max 0 --no-llm --quiet-llm` 成功入库 `倒水河`。
 - 已新增鱼种识别优化：脚本增加 `FISH_PATTERNS` 规则词典，可从第一条视频识别鱼种 `黄尾`；`data/fishing_spot_sample.json` 和 SQLite `fishing_spots.fish_species` 已同步更新。
 
 ## 7. 后续优化点

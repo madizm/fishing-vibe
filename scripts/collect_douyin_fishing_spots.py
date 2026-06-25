@@ -41,6 +41,36 @@ COMMENT_PLACE_HINTS = [
     "江", "河", "湖", "水库", "江滩", "闸", "桥", "泵站", "水厂", "码头", "村", "湾", "港", "沟", "渠", "公园",
 ]
 COMMENT_NOISE = {"全部评论", "留下你的精彩评论吧", "大家都在搜：", "分享", "回复", "作者", "加载中", "关注", "推荐视频"}
+COMMENT_KEYWORD_CATEGORIES = {
+    "place": "钓点/地名",
+    "fish": "鱼种",
+    "fish_condition": "鱼情/口况",
+    "water_condition": "水情",
+    "access": "交通/停车/到达难度",
+    "restriction": "禁钓/收费/管理/风险",
+    "bait_method": "饵料/钓法/装备",
+    "quality": "总体评价/建议",
+}
+COMMENT_KEYWORD_CATEGORY_ALIASES = {
+    "地点": "place",
+    "地名": "place",
+    "钓点": "place",
+    "鱼": "fish",
+    "鱼种": "fish",
+    "鱼情": "fish_condition",
+    "口况": "fish_condition",
+    "水情": "water_condition",
+    "交通": "access",
+    "停车": "access",
+    "限制": "restriction",
+    "禁钓": "restriction",
+    "风险": "restriction",
+    "饵料": "bait_method",
+    "钓法": "bait_method",
+    "装备": "bait_method",
+    "评价": "quality",
+    "质量": "quality",
+}
 LLM_TEXT_NOISE = {
     "读屏标签已关闭", "精选", "推荐", "搜索", "关注", "朋友", "我的", "直播", "放映厅", "短剧", "小游戏",
     "下载抖音精选", "播放", "进入全屏H", "网页全屏Y", "截图", "小窗模式U", "字幕", "不 开启", "不开启",
@@ -135,6 +165,20 @@ def init_db(conn: sqlite3.Connection) -> None:
       collected_at TEXT,
       UNIQUE(video_id, author, text, comment_time_raw),
       FOREIGN KEY(video_id) REFERENCES videos(id)
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS comment_keywords (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      video_id INTEGER,
+      comment_id INTEGER,
+      keyword TEXT,
+      category TEXT,
+      confidence REAL,
+      evidence TEXT,
+      source TEXT,
+      created_at TEXT,
+      UNIQUE(comment_id, keyword, category),
+      FOREIGN KEY(video_id) REFERENCES videos(id) ON DELETE CASCADE,
+      FOREIGN KEY(comment_id) REFERENCES video_comments(id) ON DELETE CASCADE
     )""")
     # No separate comment_quality_scores table: normalized comment quality is
     # written directly onto fishing_spots. Drop the legacy derived table if it exists.
@@ -641,6 +685,129 @@ def extract_comment_places_with_llm(comments: list[dict], city: str, llm_url: st
     return clues
 
 
+def _normalize_comment_keyword_category(value: object) -> str:
+    category = str(value or "").strip().lower()
+    if category in COMMENT_KEYWORD_CATEGORIES:
+        return category
+    return COMMENT_KEYWORD_CATEGORY_ALIASES.get(str(value or "").strip(), "")
+
+
+def _normalize_comment_keyword(value: object) -> str:
+    keyword = re.sub(r"\s+", "", str(value or "").strip(" ，,。:：；;、\"'[]{}()（）"))
+    if not keyword or len(keyword) > 16:
+        return ""
+    if keyword in {"钓点", "位置", "这里", "那里", "哪里", "评论", "视频", "作者"}:
+        return ""
+    return keyword
+
+
+def extract_comment_keywords_with_llm(
+    comments: list[dict],
+    city: str,
+    llm_url: str = DEFAULT_LLM_URL,
+    debug: bool = True,
+    group_size: int = 20,
+) -> list[dict]:
+    """Extract concise categorized keywords from comments using batched LLM calls."""
+    if not comments or group_size <= 0:
+        return []
+    category_text = "\n".join(f"- {key}: {label}" for key, label in COMMENT_KEYWORD_CATEGORIES.items())
+    keywords: list[dict] = []
+    seen: set[tuple[int, str, str]] = set()
+    for start in range(0, len(comments), group_size):
+        group = comments[start : start + group_size]
+        group_index = start // group_size + 1
+        prompt = f"""从下面抖音钓鱼视频评论中抽取简洁关键词，并按类别结构化。
+要求：
+- 只返回 JSON 数组；每项格式：{{"comment_index":7,"keywords":[{{"keyword":"有口","category":"fish_condition","confidence":0.8,"evidence":"今天有口"}}]}}
+- keyword 必须短小，优先 2-6 个汉字；不要输出完整句子
+- 只抽评论明确表达的信息，不要依据标题或常识推测
+- 每条评论最多 5 个关键词；无有效信息的评论不要返回
+- category 只能使用下列英文枚举之一：
+{category_text}
+- 常见归一化示例：有口/口好/连竿 -> 有口；没口/空军 -> 没口或空军；不让钓/赶人/保安 -> 禁钓或保安赶人；好停车/免费停车 -> 停车方便
+- 地名、鱼种若明确出现也要抽取；城市名本身（如 {city}）不要作为关键词
+
+评论（方括号为全局评论编号）：
+{format_comments_for_llm(group, max_chars=10000, start_index=start + 1)}"""
+        parsed = _chat_json_array_with_llm(
+            prompt,
+            llm_url,
+            debug,
+            f"comment-keyword-{group_index}",
+            "你是钓鱼评论关键词抽取器，只输出合法 JSON，不要解释。",
+        )
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            try:
+                comment_index = int(item.get("comment_index") or item.get("index") or item.get("comment_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not (1 <= comment_index <= len(comments)):
+                continue
+            raw_keywords = item.get("keywords") or item.get("关键词") or []
+            if isinstance(raw_keywords, dict):
+                raw_keywords = [raw_keywords]
+            if isinstance(raw_keywords, str):
+                raw_keywords = [{"keyword": raw_keywords}]
+            if not isinstance(raw_keywords, list):
+                continue
+            for raw_kw in raw_keywords[:8]:
+                if isinstance(raw_kw, str):
+                    raw_kw = {"keyword": raw_kw}
+                if not isinstance(raw_kw, dict):
+                    continue
+                keyword = _normalize_comment_keyword(raw_kw.get("keyword") or raw_kw.get("word") or raw_kw.get("name") or raw_kw.get("关键词"))
+                category = _normalize_comment_keyword_category(raw_kw.get("category") or raw_kw.get("type") or raw_kw.get("类别"))
+                if not keyword or not category:
+                    continue
+                try:
+                    confidence = float(raw_kw.get("confidence", 0.75))
+                except (TypeError, ValueError):
+                    confidence = 0.75
+                key = (comment_index, keyword, category)
+                if key in seen:
+                    continue
+                seen.add(key)
+                comment = comments[comment_index - 1]
+                evidence = str(raw_kw.get("evidence") or raw_kw.get("source_text") or comment.get("text", "")).strip()
+                keywords.append({
+                    "comment_index": comment_index,
+                    "comment_id": comment.get("comment_id"),
+                    "keyword": keyword,
+                    "category": category,
+                    "confidence": max(0.0, min(confidence, 1.0)),
+                    "evidence": evidence[:200],
+                })
+    log_llm_debug(f"comment-keyword keywords={keywords}", debug)
+    return keywords
+
+
+def aggregate_comment_keywords(keywords: list[dict]) -> list[dict]:
+    grouped: dict[tuple[str, str], dict] = {}
+    for item in keywords:
+        keyword = str(item.get("keyword", "")).strip()
+        category = str(item.get("category", "")).strip()
+        if not keyword or not category:
+            continue
+        key = (keyword, category)
+        bucket = grouped.setdefault(key, {"keyword": keyword, "category": category, "count": 0, "confidence_total": 0.0, "comment_ids": []})
+        bucket["count"] += 1
+        bucket["confidence_total"] += float(item.get("confidence", 0.0) or 0.0)
+        comment_id = item.get("comment_id")
+        if comment_id and comment_id not in bucket["comment_ids"]:
+            bucket["comment_ids"].append(comment_id)
+    result = []
+    for bucket in grouped.values():
+        count = bucket.pop("count")
+        confidence_total = bucket.pop("confidence_total")
+        bucket["count"] = count
+        bucket["avg_confidence"] = round(confidence_total / count, 4) if count else 0.0
+        result.append(bucket)
+    return sorted(result, key=lambda x: (-x["count"], x["category"], x["keyword"]))
+
+
 def score_comment_quality_groups_with_llm(
     comments: list[dict],
     group_size: int = 5,
@@ -828,14 +995,23 @@ def analyze_comment_extraction(
     use_llm: bool = True,
     llm_debug: bool = True,
     quality_group_size: int = 5,
+    keyword_group_size: int = 20,
 ) -> dict:
     """Analyze already extracted comments without browser/DB side effects."""
     rule_place_clues = extract_comment_spot_clues_from_comments(comments, city)
     llm_place_clues: list[dict] = []
+    llm_keywords: list[dict] = []
     quality_groups: list[dict] = []
     quality = {"quality_score": None, "confidence": 0.0, "detail": ""}
     if use_llm:
         llm_place_clues = extract_comment_places_with_llm(comments, city, llm_url=llm_url, debug=llm_debug)
+        llm_keywords = extract_comment_keywords_with_llm(
+            comments,
+            city,
+            llm_url=llm_url,
+            debug=llm_debug,
+            group_size=keyword_group_size,
+        )
         quality_groups = score_comment_quality_groups_with_llm(
             comments,
             group_size=quality_group_size,
@@ -847,6 +1023,8 @@ def analyze_comment_extraction(
         "comment_count": len(comments),
         "rule_place_clues": rule_place_clues,
         "llm_place_clues": llm_place_clues,
+        "llm_keywords": llm_keywords,
+        "keyword_summary": aggregate_comment_keywords(llm_keywords),
         "quality_groups": quality_groups,
         "quality": quality,
     }
@@ -861,6 +1039,7 @@ def build_extraction_report(
     llm_debug: bool = True,
     comments: list[dict] | None = None,
     comment_quality_group_size: int = 5,
+    comment_keyword_group_size: int = 20,
 ) -> dict:
     """Build a deterministic extraction report for tests and dry runs.
 
@@ -877,6 +1056,7 @@ def build_extraction_report(
             use_llm=use_llm,
             llm_debug=llm_debug,
             quality_group_size=comment_quality_group_size,
+            keyword_group_size=comment_keyword_group_size,
         )
     return report
 
@@ -986,6 +1166,7 @@ def run_extraction_only(args: argparse.Namespace) -> dict:
         llm_debug=not args.quiet_llm,
         comments=comments,
         comment_quality_group_size=args.comment_quality_group_size,
+        comment_keyword_group_size=args.comment_keyword_group_size,
     )
 
 
@@ -1068,6 +1249,36 @@ def insert_video_comments(conn: sqlite3.Connection, video_id: int, comments: lis
     return saved
 
 
+def insert_comment_keywords(conn: sqlite3.Connection, video_id: int, keywords: list[dict]) -> list[dict]:
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    saved: list[dict] = []
+    for item in keywords:
+        comment_id = item.get("comment_id")
+        keyword = _normalize_comment_keyword(item.get("keyword"))
+        category = _normalize_comment_keyword_category(item.get("category"))
+        if not comment_id or not keyword or not category:
+            continue
+        conn.execute(
+            """INSERT OR IGNORE INTO comment_keywords(video_id, comment_id, keyword, category, confidence, evidence, source, created_at)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            (
+                video_id,
+                comment_id,
+                keyword,
+                category,
+                float(item.get("confidence", 0.0) or 0.0),
+                str(item.get("evidence", ""))[:200],
+                "comment_llm",
+                now,
+            ),
+        )
+        saved_item = dict(item)
+        saved_item["keyword"] = keyword
+        saved_item["category"] = category
+        saved.append(saved_item)
+    return saved
+
+
 def apply_comment_quality_to_spots(conn: sqlite3.Connection, video_id: int, quality: dict) -> None:
     """Write normalized comment quality score directly onto fishing_spots."""
     quality_score = quality.get("quality_score")
@@ -1128,6 +1339,7 @@ def main() -> None:
     ap.add_argument("--comment-wait", type=float, default=2.0, help="Seconds to wait after each comment scroll")
     ap.add_argument("--comment-max", type=int, default=100, help="Maximum visible comments to extract/save per video")
     ap.add_argument("--comment-quality-group-size", type=int, default=5, help="LLM quality scoring group size for comments")
+    ap.add_argument("--comment-keyword-group-size", type=int, default=20, help="LLM keyword extraction group size for comments")
     ap.add_argument("--extract-only", action="store_true", help="Only parse extracted video/comments and print JSON; no DB writes or geocoding")
     ap.add_argument("--extracted-json", default="", help="Saved opencli browser extract JSON; implies --extract-only")
     ap.add_argument("--extracted-text", default="", help="Saved raw extracted page text; implies --extract-only")
@@ -1146,6 +1358,8 @@ def main() -> None:
         raise ValueError("--comment-max must be >= 0")
     if args.comment_quality_group_size <= 0:
         raise ValueError("--comment-quality-group-size must be > 0")
+    if args.comment_keyword_group_size <= 0:
+        raise ValueError("--comment-keyword-group-size must be > 0")
 
     if args.extract_only:
         report = run_extraction_only(args)
@@ -1219,18 +1433,25 @@ def main() -> None:
                     use_llm=not args.no_llm,
                     llm_debug=not args.quiet_llm,
                     quality_group_size=args.comment_quality_group_size,
+                    keyword_group_size=args.comment_keyword_group_size,
                 )
                 rule_comment_clues = comment_analysis["rule_place_clues"]
                 comment_clues = comment_analysis["llm_place_clues"]
+                comment_keywords = comment_analysis["llm_keywords"]
+                comment_keyword_summary = comment_analysis["keyword_summary"]
                 quality_groups = comment_analysis["quality_groups"]
                 video_quality = comment_analysis["quality"]
                 if not args.no_llm:
+                    comment_keywords = insert_comment_keywords(conn, video_id, comment_keywords)
+                    comment_keyword_summary = aggregate_comment_keywords(comment_keywords)
                     apply_comment_quality_to_spots(conn, video_id, video_quality)
             except Exception as exc:
                 print(f"[warn] comment extraction/LLM analysis failed for {url}: {exc}", file=sys.stderr, flush=True)
                 comments = []
                 rule_comment_clues = []
                 comment_clues = []
+                comment_keywords = []
+                comment_keyword_summary = []
                 quality_groups = []
                 video_quality = {"quality_score": None, "confidence": 0.0, "detail": ""}
             for clue in comment_clues:
@@ -1265,6 +1486,8 @@ def main() -> None:
                 "saved_comments": len(comments),
                 "rule_comment_place_clues": rule_comment_clues,
                 "comment_place_clues": comment_clues,
+                "comment_keywords": comment_keywords,
+                "comment_keyword_summary": comment_keyword_summary,
                 "spot_quality_score": video_quality.get("quality_score"),
                 "spot_quality_detail": video_quality.get("detail", ""),
                 "comment_quality_groups": quality_groups,

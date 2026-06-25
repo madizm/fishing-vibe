@@ -149,7 +149,7 @@ def init_db(conn: sqlite3.Connection) -> None:
       source_type TEXT,
       source_text TEXT,
       created_at TEXT,
-      FOREIGN KEY(video_id) REFERENCES videos(id)
+      FOREIGN KEY(video_id) REFERENCES videos(id) ON DELETE CASCADE
     )""")
     conn.execute("""CREATE TABLE IF NOT EXISTS video_comments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -164,7 +164,7 @@ def init_db(conn: sqlite3.Connection) -> None:
       raw_json TEXT,
       collected_at TEXT,
       UNIQUE(video_id, author, text, comment_time_raw),
-      FOREIGN KEY(video_id) REFERENCES videos(id)
+      FOREIGN KEY(video_id) REFERENCES videos(id) ON DELETE CASCADE
     )""")
     conn.execute("""CREATE TABLE IF NOT EXISTS comment_keywords (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -721,7 +721,7 @@ def extract_comment_keywords_with_llm(
 要求：
 - 只返回 JSON 数组；每项格式：{{"comment_index":7,"keywords":[{{"keyword":"有口","category":"fish_condition","confidence":0.8,"evidence":"今天有口"}}]}}
 - keyword 必须短小，优先 2-6 个汉字；不要输出完整句子
-- 只抽评论明确表达的信息，不要依据标题或常识推测
+- 只抽评论明确表达的信息，不要依据疑问句或祈使句
 - 每条评论最多 5 个关键词；无有效信息的评论不要返回
 - category 只能使用下列英文枚举之一：
 {category_text}

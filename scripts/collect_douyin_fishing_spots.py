@@ -164,7 +164,55 @@ def search(keyword: str, limit: int) -> list[dict]:
 
 def extract_video(url: str, session: str) -> dict:
     run(["opencli", "browser", session, "open", url], timeout=120)
-    out = run(["opencli", "browser", session, "extract", "--chunk-size", "10000"], timeout=120)
+    # Douyin video pages render sidebars/recommendations inside the same page.
+    # A whole-page markdown extract often pulls text from
+    # <div data-e2e="related-video"> and the auto-next overlay, which can make
+    # downstream place extraction attribute recommended videos to the current
+    # video. Prefer a focused DOM extract of only the current video's info card.
+    js = r"""(() => {
+      const normalize = (s) => String(s || '')
+        .replace(/[\u200b\ufeff]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const lines = [];
+      const add = (s) => {
+        s = normalize(s);
+        if (!s || lines.includes(s)) return;
+        if (/^\d+$/.test(s) || ['举报', '分享', '回复', '展开'].includes(s)) return;
+        lines.push(s);
+      };
+
+      const declarations = Array.from(document.querySelectorAll('[data-e2e="video-detail"] *'))
+        .map((el) => normalize(el.innerText || el.textContent || ''))
+        .filter((text) => /^作者声明[:：]/.test(text))
+        .sort((a, b) => a.length - b.length);
+      add(declarations[0] || '');
+
+      const info = document.querySelector('[data-e2e="detail-video-info"]');
+      if (info) {
+        String(info.innerText || info.textContent || '')
+          .split(/\n+/)
+          .forEach(add);
+      }
+
+      return { title: document.title || '', content: lines.join('\n') };
+    })()"""
+    try:
+        focused = browser_eval(session, " ".join(line.strip() for line in js.splitlines()))
+        if isinstance(focused, dict) and str(focused.get("content", "")).strip():
+            return focused
+    except Exception:
+        pass
+
+    # Fallback for DOM changes: scope extraction to the info card when possible.
+    try:
+        out = run([
+            "opencli", "browser", session, "extract",
+            "--selector", "[data-e2e=\"detail-video-info\"]",
+            "--chunk-size", "10000",
+        ], timeout=120)
+    except Exception:
+        out = run(["opencli", "browser", session, "extract", "--chunk-size", "10000"], timeout=120)
     return json.loads(out)
 
 
@@ -342,29 +390,38 @@ def is_comment_candidate(line: str) -> bool:
 def extract_comment_place_names(line: str, city: str) -> list[str]:
     candidates: list[str] = []
     for pattern in [
-        r"([\u4e00-\u9fa5]{2,12}(?:江滩|水库|水厂|泵站|公园|闸|桥|码头|江|河|湖|村|湾|港|沟|渠))",
+        r"([\u4e00-\u9fa5]{1,12}(?:江滩|水库|水厂|泵站|公园|闸|桥|码头|江|河|湖|村|湾|港|沟|渠))",
         r"([\u4e00-\u9fa5]{2,8}钓点)",
         r"([\u4e00-\u9fa5]{2,8}钓位)",
     ]:
         for m in re.finditer(pattern, line):
             name = m.group(1).strip(" ，,。.!！?？")
             name = re.sub(r"^(湖北省|武汉市|武汉|湖北|去|到|在)", "", name)
+            had_generic_suffix = bool(re.search(r"(?:黄尾钓点|钓点|钓位)$", name))
             name = re.sub(r"(黄尾钓点|钓点|钓位)$", "", name)
+            if had_generic_suffix and not any(hint in name for hint in COMMENT_PLACE_HINTS):
+                continue
             if name and len(name) >= 2 and name not in candidates and name not in {city, "同款", "哪里"}:
                 candidates.append(name)
     return _dedupe_places(candidates)
 
 
-def extract_comment_spot_clues(session: str, city: str, scrolls: int = 0, wait_seconds: float = 2.0) -> list[dict]:
-    comments = extract_video_comments(session, scrolls=scrolls, wait_seconds=wait_seconds, max_comments=200)
+def extract_comment_spot_clues_from_comments(comments: list[dict], city: str) -> list[dict]:
+    """Rule-based comment place clues from already extracted comments.
+
+    This pure helper is intentionally side-effect free so it can be exercised
+    with saved comment JSON fixtures without opening a browser.
+    """
     clues: list[dict] = []
-    for comment in comments:
-        line = comment["text"]
+    for index, comment in enumerate(comments, start=1):
+        line = str(comment.get("text", "")).strip()
         if not is_comment_candidate(line):
             continue
         places = extract_comment_place_names(line, city)
         if places:
             clues.append({
+                "comment_index": index,
+                "comment_id": comment.get("comment_id"),
                 "text": line,
                 "author": comment.get("author", ""),
                 "comment_time": comment.get("comment_time", ""),
@@ -374,6 +431,11 @@ def extract_comment_spot_clues(session: str, city: str, scrolls: int = 0, wait_s
                 "place_candidates": places,
             })
     return clues
+
+
+def extract_comment_spot_clues(session: str, city: str, scrolls: int = 0, wait_seconds: float = 2.0) -> list[dict]:
+    comments = extract_video_comments(session, scrolls=scrolls, wait_seconds=wait_seconds, max_comments=200)
+    return extract_comment_spot_clues_from_comments(comments, city)
 
 
 def clean_text_for_llm(text: str, max_lines: int = 120) -> str:
@@ -724,8 +786,8 @@ def extract_fish_species_with_llm(text: str, llm_url: str = DEFAULT_LLM_URL, deb
 
 
 def parse_video(search_item: dict, extracted: dict, city: str = "武汉", llm_url: str = DEFAULT_LLM_URL, use_llm: bool = True, llm_debug: bool = True) -> dict:
-    content = extracted.get("content", "")
-    title = extracted.get("title", "")
+    content = str(extracted.get("content", "") or "")
+    title = str(extracted.get("title", "") or "")
     if title.endswith(" - 抖音"):
         title = title[:-5]
     title = title or search_item.get("desc", "")
@@ -757,6 +819,174 @@ def parse_video(search_item: dict, extracted: dict, city: str = "武汉", llm_ur
         "fish_species_source": fish_source,
         "fish_confidence": fish_confidence,
     }
+
+
+def analyze_comment_extraction(
+    comments: list[dict],
+    city: str,
+    llm_url: str = DEFAULT_LLM_URL,
+    use_llm: bool = True,
+    llm_debug: bool = True,
+    quality_group_size: int = 5,
+) -> dict:
+    """Analyze already extracted comments without browser/DB side effects."""
+    rule_place_clues = extract_comment_spot_clues_from_comments(comments, city)
+    llm_place_clues: list[dict] = []
+    quality_groups: list[dict] = []
+    quality = {"quality_score": None, "confidence": 0.0, "detail": ""}
+    if use_llm:
+        llm_place_clues = extract_comment_places_with_llm(comments, city, llm_url=llm_url, debug=llm_debug)
+        quality_groups = score_comment_quality_groups_with_llm(
+            comments,
+            group_size=quality_group_size,
+            llm_url=llm_url,
+            debug=llm_debug,
+        )
+        quality = aggregate_quality_scores(quality_groups)
+    return {
+        "comment_count": len(comments),
+        "rule_place_clues": rule_place_clues,
+        "llm_place_clues": llm_place_clues,
+        "quality_groups": quality_groups,
+        "quality": quality,
+    }
+
+
+def build_extraction_report(
+    search_item: dict,
+    extracted: dict,
+    city: str = "武汉",
+    llm_url: str = DEFAULT_LLM_URL,
+    use_llm: bool = True,
+    llm_debug: bool = True,
+    comments: list[dict] | None = None,
+    comment_quality_group_size: int = 5,
+) -> dict:
+    """Build a deterministic extraction report for tests and dry runs.
+
+    The report contains only parsed/extracted information. It does not write to
+    SQLite and does not geocode, so fixtures can be tested quickly offline.
+    """
+    video = parse_video(search_item, extracted, city=city, llm_url=llm_url, use_llm=use_llm, llm_debug=llm_debug)
+    report: dict = {"video": video}
+    if comments is not None:
+        report["comments"] = analyze_comment_extraction(
+            comments,
+            city,
+            llm_url=llm_url,
+            use_llm=use_llm,
+            llm_debug=llm_debug,
+            quality_group_size=comment_quality_group_size,
+        )
+    return report
+
+
+def _read_json_file(path: str | Path) -> object:
+    with Path(path).open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _coerce_search_item(data: object, url: str = "") -> dict:
+    if isinstance(data, list):
+        items = [x for x in data if isinstance(x, dict)]
+        if url:
+            for item in items:
+                if item.get("url") == url:
+                    return item
+        return items[0] if items else {"url": url, "desc": "", "author": ""}
+    if isinstance(data, dict):
+        for key in ("item", "search_item", "video"):
+            value = data.get(key)
+            if isinstance(value, dict):
+                return _coerce_search_item(value, url=url)
+        for key in ("items", "results", "data"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return _coerce_search_item(value, url=url)
+        item = dict(data)
+        if url and not item.get("url"):
+            item["url"] = url
+        item.setdefault("desc", "")
+        item.setdefault("author", "")
+        return item
+    return {"url": url, "desc": "", "author": ""}
+
+
+def load_search_item_fixture(path: str, url: str = "") -> dict:
+    return _coerce_search_item(_read_json_file(path), url=url) if path else {"url": url, "desc": "", "author": ""}
+
+
+def load_extracted_fixture(json_path: str = "", text_path: str = "") -> dict:
+    if json_path and text_path:
+        raise ValueError("--extracted-json and --extracted-text cannot be used together")
+    if json_path:
+        data = _read_json_file(json_path)
+        if not isinstance(data, dict):
+            raise ValueError("--extracted-json must contain a JSON object")
+        if isinstance(data.get("extracted"), dict):
+            data = data["extracted"]
+        extracted = dict(data)
+        if "content" not in extracted:
+            for key in ("markdown", "text", "body"):
+                if key in extracted:
+                    extracted["content"] = extracted[key]
+                    break
+        return extracted
+    if text_path:
+        text = Path(text_path).read_text(encoding="utf-8")
+        return {"title": Path(text_path).stem, "content": text}
+    raise ValueError("missing extracted fixture path")
+
+
+def load_comments_fixture(path: str) -> list[dict]:
+    data = _read_json_file(path)
+    if isinstance(data, dict):
+        for key in ("comments", "items", "results", "data"):
+            value = data.get(key)
+            if isinstance(value, list):
+                data = value
+                break
+    if not isinstance(data, list):
+        raise ValueError("--comments-json must contain a list or an object with a comments list")
+    return [dict(x) for x in data if isinstance(x, dict)]
+
+
+def run_extraction_only(args: argparse.Namespace) -> dict:
+    """Run extraction parsing only, from fixtures or from one browser-opened URL."""
+    direct_url = args.url.strip()
+    search_item = load_search_item_fixture(args.search_item_json, url=direct_url)
+    if args.extracted_json or args.extracted_text:
+        extracted = load_extracted_fixture(args.extracted_json, args.extracted_text)
+    elif args.comments_json and not direct_url:
+        extracted = {"title": "", "content": ""}
+    else:
+        if not direct_url:
+            raise ValueError("--extract-only requires --url unless a fixture path is provided")
+        extracted = extract_video(direct_url, args.session)
+    if direct_url and not search_item.get("url"):
+        search_item["url"] = direct_url
+
+    comments: list[dict] | None = None
+    if args.comments_json:
+        comments = load_comments_fixture(args.comments_json)
+    elif args.include_comments and not (args.extracted_json or args.extracted_text):
+        comments = extract_video_comments(
+            args.session,
+            scrolls=args.comment_scrolls,
+            wait_seconds=args.comment_wait,
+            max_comments=args.comment_max,
+        )
+
+    return build_extraction_report(
+        search_item,
+        extracted,
+        city=args.city,
+        llm_url=args.llm_url,
+        use_llm=not args.no_llm,
+        llm_debug=not args.quiet_llm,
+        comments=comments,
+        comment_quality_group_size=args.comment_quality_group_size,
+    )
 
 
 def sleep_between_items(index: int, total: int, delay_min: float, delay_max: float) -> None:
@@ -892,16 +1122,21 @@ def main() -> None:
     ap.add_argument("--delay-min", type=float, default=8.0, help="Minimum sleep seconds between video detail requests")
     ap.add_argument("--delay-max", type=float, default=20.0, help="Maximum sleep seconds between video detail requests")
     ap.add_argument("--max-video-places", type=int, default=3, help="Maximum video-text place candidates to geocode/save per video; 0 means all")
-    ap.add_argument("--include-comments", action="store_true", help="Extract/save visible comments, run LLM comment spot extraction, and score comment quality")
+    ap.add_argument("--include-comments", dest="include_comments", action="store_true", default=True, help="Extract/save visible comments, run LLM comment spot extraction, and score comment quality (default)")
+    ap.add_argument("--no-include-comments", dest="include_comments", action="store_false", help="Skip comment extraction and analysis")
     ap.add_argument("--comment-scrolls", type=int, default=0, help="How many times to scroll before reading comments")
     ap.add_argument("--comment-wait", type=float, default=2.0, help="Seconds to wait after each comment scroll")
     ap.add_argument("--comment-max", type=int, default=100, help="Maximum visible comments to extract/save per video")
     ap.add_argument("--comment-quality-group-size", type=int, default=5, help="LLM quality scoring group size for comments")
+    ap.add_argument("--extract-only", action="store_true", help="Only parse extracted video/comments and print JSON; no DB writes or geocoding")
+    ap.add_argument("--extracted-json", default="", help="Saved opencli browser extract JSON; implies --extract-only")
+    ap.add_argument("--extracted-text", default="", help="Saved raw extracted page text; implies --extract-only")
+    ap.add_argument("--search-item-json", default="", help="Saved douyin search result/item JSON used as title/author/url context")
+    ap.add_argument("--comments-json", default="", help="Saved comments JSON fixture; object with comments[] or a list")
     args = ap.parse_args()
 
-    DB_PATH.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, isolation_level=None)
-    init_db(conn)
+    if args.extracted_json or args.extracted_text or args.comments_json:
+        args.extract_only = True
 
     if args.delay_min < 0 or args.delay_max < args.delay_min:
         raise ValueError("--delay-max must be >= --delay-min and delays must be non-negative")
@@ -911,6 +1146,15 @@ def main() -> None:
         raise ValueError("--comment-max must be >= 0")
     if args.comment_quality_group_size <= 0:
         raise ValueError("--comment-quality-group-size must be > 0")
+
+    if args.extract_only:
+        report = run_extraction_only(args)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
+
+    DB_PATH.parent.mkdir(exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, isolation_level=None)
+    init_db(conn)
 
     spot_results = []
     comment_results = []
@@ -968,28 +1212,24 @@ def main() -> None:
                     max_comments=args.comment_max,
                 )
                 comments = insert_video_comments(conn, video_id, comments)
-                if args.no_llm:
-                    comment_clues = []
-                    quality_groups = []
-                    video_quality = {"quality_score": None, "confidence": 0.0, "detail": ""}
-                else:
-                    comment_clues = extract_comment_places_with_llm(
-                        comments,
-                        args.city,
-                        llm_url=args.llm_url,
-                        debug=not args.quiet_llm,
-                    )
-                    quality_groups = score_comment_quality_groups_with_llm(
-                        comments,
-                        group_size=args.comment_quality_group_size,
-                        llm_url=args.llm_url,
-                        debug=not args.quiet_llm,
-                    )
-                    video_quality = aggregate_quality_scores(quality_groups)
+                comment_analysis = analyze_comment_extraction(
+                    comments,
+                    args.city,
+                    llm_url=args.llm_url,
+                    use_llm=not args.no_llm,
+                    llm_debug=not args.quiet_llm,
+                    quality_group_size=args.comment_quality_group_size,
+                )
+                rule_comment_clues = comment_analysis["rule_place_clues"]
+                comment_clues = comment_analysis["llm_place_clues"]
+                quality_groups = comment_analysis["quality_groups"]
+                video_quality = comment_analysis["quality"]
+                if not args.no_llm:
                     apply_comment_quality_to_spots(conn, video_id, video_quality)
             except Exception as exc:
                 print(f"[warn] comment extraction/LLM analysis failed for {url}: {exc}", file=sys.stderr, flush=True)
                 comments = []
+                rule_comment_clues = []
                 comment_clues = []
                 quality_groups = []
                 video_quality = {"quality_score": None, "confidence": 0.0, "detail": ""}
@@ -1023,6 +1263,7 @@ def main() -> None:
                 "video": video["url"],
                 "title": video["title"],
                 "saved_comments": len(comments),
+                "rule_comment_place_clues": rule_comment_clues,
                 "comment_place_clues": comment_clues,
                 "spot_quality_score": video_quality.get("quality_score"),
                 "spot_quality_detail": video_quality.get("detail", ""),

@@ -40,6 +40,13 @@ code { background: #edf4f1; padding: 2px 5px; border-radius: 5px; }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .tag { padding: 3px 8px; border-radius: 999px; background: #e9f6ef; color: #116642; font-size: 12px; font-weight: 700; }
 .tag.gray { background: #eef2f1; color: #596863; }
+.score { display: inline-flex; align-items: center; gap: 5px; }
+.score i, .legend-item i { width: 10px; height: 10px; display: inline-block; border-radius: 999px; background: var(--pin-color); box-shadow: 0 0 0 2px rgba(255,255,255,.9), 0 0 0 3px rgba(20,35,31,.08); }
+
+.score-legend { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.score-legend strong { display: block; margin-bottom: 8px; font-size: 12px; color: #30433d; }
+.legend-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 10px; }
+.legend-item { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; line-height: 1.3; }
 
 .map-wrap { position: relative; min-width: 0; }
 #map { position: absolute; inset: 0; }

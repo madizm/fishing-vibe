@@ -31,8 +31,17 @@
         <label>鱼种</label>
         <select id="fishFilter"><option value="">全部鱼种</option></select>
 
-        <label>最低可信度 <span id="confidenceValue">0</span></label>
-        <input id="confidenceFilter" type="range" min="0" max="1" step="0.1" value="0" />
+        <label>视频发布月份</label>
+        <select id="monthFilter"><option value="">全部月份（1–12月）</option></select>
+
+        <label>最低钓点评分 <span id="scoreValue">0</span></label>
+        <input id="scoreFilter" type="range" min="0" max="1" step="0.1" value="0" />
+        <small>按 <code>fishing_spots.quality_score</code> 过滤，评分越高代表钓点质量越可靠。</small>
+
+        <div class="score-legend" aria-label="钓点评分图标颜色图例">
+          <strong>图标颜色</strong>
+          <div id="scoreLegend" class="legend-grid"></div>
+        </div>
       </section>
 
       <section class="toolbar">

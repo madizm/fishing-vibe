@@ -36,6 +36,18 @@ FISH_PATTERNS: dict[str, list[str]] = {
     "白条": ["白条", "餐条", "参条", "蓝刀"],
 }
 
+CATEGORY_LABELS = {
+    "place": "地点",
+    "fish": "鱼种",
+    "fish_condition": "鱼情",
+    "water_condition": "水况",
+    "access": "交通",
+    "restriction": "限制",
+    "bait_method": "钓法",
+    "quality": "评价",
+}
+CATEGORY_ORDER = ["fish_condition", "quality", "water_condition", "restriction", "access", "bait_method", "fish", "place"]
+
 
 def parse_json_list(value: Any) -> list[str]:
     if not value:
@@ -83,9 +95,70 @@ def infer_fish_species(*texts: str) -> list[str]:
     return normalize_fish_species(found)
 
 
+def table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
+    return row is not None
+
+
+def load_comment_keyword_summaries(conn: sqlite3.Connection) -> dict[int, dict[str, Any]]:
+    """Build per-video comment summaries from comment_keywords."""
+    if not table_exists(conn, "comment_keywords"):
+        return {}
+
+    rows = conn.execute(
+        """
+        SELECT
+          video_id,
+          keyword,
+          category,
+          COUNT(*) AS count,
+          AVG(COALESCE(confidence, 0)) AS avg_confidence,
+          GROUP_CONCAT(DISTINCT evidence) AS evidence
+        FROM comment_keywords
+        WHERE video_id IS NOT NULL
+          AND TRIM(COALESCE(keyword, '')) != ''
+          AND TRIM(COALESCE(category, '')) != ''
+        GROUP BY video_id, category, keyword
+        ORDER BY video_id ASC, count DESC, avg_confidence DESC, category ASC, keyword ASC
+        """
+    ).fetchall()
+
+    by_video: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        item = {
+            "keyword": row["keyword"],
+            "category": row["category"],
+            "category_label": CATEGORY_LABELS.get(row["category"], row["category"]),
+            "count": row["count"],
+            "avg_confidence": round(float(row["avg_confidence"] or 0), 4),
+            "evidence": [v for v in str(row["evidence"] or "").split(",") if v.strip()][:3],
+        }
+        bucket = by_video.setdefault(int(row["video_id"]), {"items": [], "by_category": {}})
+        bucket["items"].append(item)
+        bucket["by_category"].setdefault(row["category"], []).append(item)
+
+    for bucket in by_video.values():
+        parts: list[str] = []
+        categories = sorted(
+            bucket["by_category"],
+            key=lambda c: (CATEGORY_ORDER.index(c) if c in CATEGORY_ORDER else len(CATEGORY_ORDER), c),
+        )
+        for category in categories:
+            items = sorted(bucket["by_category"][category], key=lambda x: (-x["count"], -x["avg_confidence"], x["keyword"]))[:4]
+            label = CATEGORY_LABELS.get(category, category)
+            keywords = "、".join(item["keyword"] for item in items)
+            if keywords:
+                parts.append(f"{label}：{keywords}")
+        bucket["summary"] = "；".join(parts) if parts else ""
+        del bucket["by_category"]
+
+    return by_video
+
+
 def export(db_path: Path, out_path: Path) -> dict[str, Any]:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    comment_keyword_summaries = load_comment_keyword_summaries(conn)
     rows = conn.execute(
         """
         SELECT
@@ -104,6 +177,7 @@ def export(db_path: Path, out_path: Path) -> dict[str, Any]:
     features: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
+        comment_keywords = comment_keyword_summaries.get(item.get("video_id") or 0, {})
         species = normalize_fish_species(parse_json_list(item.get("fish_species")))
         source = item.get("fish_species_source") or ""
         fish_confidence = item.get("fish_confidence")
@@ -134,6 +208,8 @@ def export(db_path: Path, out_path: Path) -> dict[str, Any]:
                     "quality_score": item.get("quality_score"),
                     "quality_score_source": item.get("quality_score_source") or "",
                     "quality_score_detail": item.get("quality_score_detail") or "",
+                    "comment_keywords": comment_keywords.get("items", []),
+                    "comment_keyword_summary": comment_keywords.get("summary", ""),
                     "title": item.get("title") or "",
                     "author": item.get("author") or "",
                     "url": item.get("url") or "",

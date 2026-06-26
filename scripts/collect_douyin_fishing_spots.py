@@ -1180,7 +1180,7 @@ def sleep_between_items(index: int, total: int, delay_min: float, delay_max: flo
 
 def geocode(place: str, city: str = "武汉") -> dict | None:
     query = place if place.startswith(city) else f"{city}{place}"
-    out = run(["python", str(GEOCODE_SCRIPT), "-p", "baidu", "geocode", "--to", "wgs84", query], timeout=60)
+    out = run([sys.executable, str(GEOCODE_SCRIPT), "-p", "baidu", "geocode", "--to", "wgs84", query], timeout=60)
     data = json.loads(out)
     # 百度地图返回 status 为整数 0
     if data.get("status") != 0 or "result" not in data:

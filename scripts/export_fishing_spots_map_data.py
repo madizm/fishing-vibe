@@ -9,6 +9,7 @@ import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from statistics import mean
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,6 +96,92 @@ def infer_fish_species(*texts: str) -> list[str]:
     return normalize_fish_species(found)
 
 
+def to_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def round_optional(value: float | None, digits: int = 3) -> float | None:
+    return round(value, digits) if value is not None else None
+
+
+def publish_month(value: Any) -> str:
+    match = re.match(r"^\d{4}-(\d{2})", str(value or ""))
+    return match.group(1) if match else ""
+
+
+def normalize_entity_name(value: Any) -> str:
+    """Normalize a place label for conservative entity grouping.
+
+    We intentionally keep coordinates in the grouping key and only merge rows whose
+    normalized place label also matches. Coarse geocoding can make unrelated places
+    share a coordinate; that data-quality issue is handled separately later.
+    """
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[\s\-_·•,，。:：;；/\\()（）\[\]【】]+", "", text)
+    text = re.sub(r"(钓点|钓位|野钓点)$", "", text)
+    return text or "未命名钓点"
+
+
+def source_sort_key(source: dict[str, Any]) -> tuple[str, float]:
+    return (source.get("publish_time") or "", float(source.get("confidence") or 0))
+
+
+def score_stats(sources: list[dict[str, Any]]) -> dict[str, Any]:
+    scored = [s for s in sources if to_float(s.get("quality_score")) is not None]
+    if not scored:
+        return {"quality_score": None, "score_count": 0, "score_min": None, "score_max": None}
+
+    weighted_total = 0.0
+    weight_total = 0.0
+    scores: list[float] = []
+    for source in scored:
+        score = to_float(source.get("quality_score"))
+        confidence = to_float(source.get("confidence"))
+        if score is None:
+            continue
+        weight = confidence if confidence is not None and confidence > 0 else 0.5
+        weighted_total += score * weight
+        weight_total += weight
+        scores.append(score)
+
+    quality_score = weighted_total / weight_total if weight_total else mean(scores)
+    return {
+        "quality_score": round_optional(quality_score),
+        "score_count": len(scores),
+        "score_min": round_optional(min(scores)),
+        "score_max": round_optional(max(scores)),
+    }
+
+
+def confidence_score(sources: list[dict[str, Any]]) -> float | None:
+    values = [v for v in (to_float(s.get("confidence")) for s in sources) if v is not None]
+    return round_optional(mean(values)) if values else None
+
+
+def aggregate_keywords(sources: list[dict[str, Any]], limit: int = 12) -> list[str]:
+    totals: dict[str, dict[str, Any]] = {}
+    for source in sources:
+        for item in source.pop("_comment_keywords", []):
+            keyword = str(item.get("keyword") or "").strip()
+            if not keyword:
+                continue
+            bucket = totals.setdefault(keyword, {"label": keyword, "count": 0, "confidence": 0.0})
+            count = int(item.get("count") or 1)
+            bucket["count"] += count
+            bucket["confidence"] += float(item.get("avg_confidence") or 0) * count
+
+    ranked = sorted(
+        totals.values(),
+        key=lambda item: (-item["count"], -(item["confidence"] / item["count"] if item["count"] else 0), item["label"]),
+    )
+    return [item["label"] for item in ranked[:limit]]
+
+
 def table_exists(conn: sqlite3.Connection, name: str) -> bool:
     row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
     return row is not None
@@ -163,10 +250,10 @@ def export(db_path: Path, out_path: Path) -> dict[str, Any]:
         """
         SELECT
           s.id, s.video_id, s.place_name, s.query_name, s.longitude, s.latitude,
-          s.geocode_score, s.geocode_level, s.confidence, s.source_text, s.created_at,
-          s.fish_species, s.fish_species_source, s.fish_confidence,
-          s.quality_score, s.quality_score_source, s.quality_score_detail,
-          v.platform, v.keyword, v.title, v.url, v.author, v.publish_time, v.collected_at
+          s.confidence, s.source_text,
+          s.fish_species,
+          s.quality_score,
+          v.title, v.url, v.author, v.publish_time
         FROM fishing_spots s
         LEFT JOIN videos v ON v.id = s.video_id
         WHERE s.longitude IS NOT NULL AND s.latitude IS NOT NULL
@@ -174,53 +261,98 @@ def export(db_path: Path, out_path: Path) -> dict[str, Any]:
         """
     ).fetchall()
 
-    features: list[dict[str, Any]] = []
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
         item = dict(row)
         comment_keywords = comment_keyword_summaries.get(item.get("video_id") or 0, {})
         species = normalize_fish_species(parse_json_list(item.get("fish_species")))
-        source = item.get("fish_species_source") or ""
-        fish_confidence = item.get("fish_confidence")
         if not species:
             species = infer_fish_species(item.get("title") or "", item.get("source_text") or "")
-            if species:
-                source = "title+source_text(inferred_for_map)"
-                fish_confidence = fish_confidence or 0.7
 
+        lon = float(item["longitude"])
+        lat = float(item["latitude"])
+        display_name = item.get("place_name") or item.get("query_name") or "未命名钓点"
+        coord_key = f"{lon:.6f},{lat:.6f}"
+        key = (coord_key, normalize_entity_name(display_name))
+        group = grouped.setdefault(
+            key,
+            {
+                "name": display_name,
+                "coordinates": [lon, lat],
+                "aliases": [],
+                "sources_by_key": {},
+                "fish_species": [],
+            },
+        )
+
+        for alias in [item.get("place_name"), item.get("query_name")]:
+            alias = str(alias or "").strip()
+            if alias and alias not in group["aliases"] and alias != group["name"]:
+                group["aliases"].append(alias)
+        for fish in species:
+            if fish not in group["fish_species"]:
+                group["fish_species"].append(fish)
+
+        source_key = f"video:{item['video_id']}" if item.get("video_id") else f"spot:{item['id']}"
+        candidate = {
+            "id": item["id"],
+            "video_id": item.get("video_id"),
+            "title": item.get("title") or display_name,
+            "author": item.get("author") or "",
+            "url": item.get("url") or "",
+            "publish_time": item.get("publish_time") or "",
+            "publish_month": publish_month(item.get("publish_time")),
+            "quality_score": round_optional(to_float(item.get("quality_score"))),
+            "confidence": round_optional(to_float(item.get("confidence"))),
+            "fish_species": species,
+            "_comment_keywords": comment_keywords.get("items", []),
+        }
+        existing = group["sources_by_key"].get(source_key)
+        if existing is None or source_sort_key(candidate) > source_sort_key(existing):
+            group["sources_by_key"][source_key] = candidate
+
+    features: list[dict[str, Any]] = []
+    for index, group in enumerate(grouped.values(), 1):
+        sources = sorted(group["sources_by_key"].values(), key=source_sort_key, reverse=True)
+        monthly_scores: dict[str, dict[str, Any]] = {}
+        for month in sorted({s.get("publish_month") for s in sources if s.get("publish_month")}):
+            month_sources = [s for s in sources if s.get("publish_month") == month]
+            monthly_scores[month] = {
+                "source_count": len(month_sources),
+                **score_stats(month_sources),
+            }
+
+        stats = score_stats(sources)
+        properties = {
+            "id": f"spot-{index:04d}",
+            "place_name": group["name"],
+            "aliases": group["aliases"][:6],
+            "source_count": len(sources),
+            "confidence": confidence_score(sources),
+            **stats,
+            "fish_species": group["fish_species"],
+            "keywords": aggregate_keywords(sources),
+            "monthly_scores": monthly_scores,
+            "sources": [
+                {key: value for key, value in source.items() if not key.startswith("_") and value not in (None, "", [])}
+                for source in sources
+            ],
+        }
         features.append(
             {
                 "type": "Feature",
-                "geometry": {
-                    "type": "Point",
-                    "coordinates": [float(item["longitude"]), float(item["latitude"])],
-                },
-                "properties": {
-                    "id": item["id"],
-                    "video_id": item["video_id"],
-                    "place_name": item.get("place_name") or "未命名钓点",
-                    "query_name": item.get("query_name") or "",
-                    "confidence": item.get("confidence"),
-                    "geocode_score": item.get("geocode_score"),
-                    "geocode_level": item.get("geocode_level") or "",
-                    "fish_species": species,
-                    "fish_species_source": source,
-                    "fish_confidence": fish_confidence,
-                    "quality_score": item.get("quality_score"),
-                    "quality_score_source": item.get("quality_score_source") or "",
-                    "quality_score_detail": item.get("quality_score_detail") or "",
-                    "comment_keywords": comment_keywords.get("items", []),
-                    "comment_keyword_summary": comment_keywords.get("summary", ""),
-                    "title": item.get("title") or "",
-                    "author": item.get("author") or "",
-                    "url": item.get("url") or "",
-                    "publish_time": item.get("publish_time") or "",
-                    "platform": item.get("platform") or "douyin",
-                    "keyword": item.get("keyword") or "",
-                    "created_at": item.get("created_at") or item.get("collected_at") or "",
-                    "source_text": (item.get("source_text") or "")[:500],
-                },
+                "geometry": {"type": "Point", "coordinates": group["coordinates"]},
+                "properties": properties,
             }
         )
+
+    features.sort(
+        key=lambda feature: (
+            -(feature["properties"].get("quality_score") or -1),
+            -feature["properties"].get("source_count", 0),
+            feature["properties"].get("place_name", ""),
+        )
+    )
 
     payload = {
         "type": "FeatureCollection",

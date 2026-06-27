@@ -55,6 +55,8 @@ code { background: #edf4f1; padding: 2px 5px; border-radius: 5px; }
 .info h3 { margin: 0 0 8px; font-size: 18px; }
 .info p { margin: 5px 0; color: #344842; }
 .info a { color: var(--brand-2); font-weight: 700; text-decoration: none; }
+.source-list { margin: 6px 0 0; padding-left: 20px; color: #344842; }
+.source-list li { margin: 6px 0; }
 
 @media (max-width: 860px) {
   #app { grid-template-columns: 1fr; grid-template-rows: 46vh 54vh; }

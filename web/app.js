@@ -68,14 +68,34 @@ function buildFishFilter() {
   });
 }
 
-function getPublishMonth(spot) {
-  const match = String(spot.publish_time || '').match(/^(\d{4})-(\d{2})/);
-  return match ? match[2] : '';
-}
-
 function formatMonth(month) {
   if (!month) return '未注明月份';
   return `${Number(month)}月`;
+}
+
+function getSelectedMonth() {
+  return $('monthFilter')?.value || '';
+}
+
+function getActiveStats(spot, month = getSelectedMonth()) {
+  if (month) return spot.monthly_scores?.[month] || null;
+  return spot;
+}
+
+function getActiveSources(spot, month = getSelectedMonth()) {
+  const sources = spot.sources || [];
+  return month ? sources.filter((source) => source.publish_month === month) : sources;
+}
+
+function getActiveScore(spot, month = getSelectedMonth()) {
+  const stats = getActiveStats(spot, month);
+  const score = Number(stats?.quality_score);
+  return Number.isFinite(score) ? score : null;
+}
+
+function formatScore(value) {
+  const score = Number(value);
+  return Number.isFinite(score) ? score.toFixed(2) : '-';
 }
 
 function buildMonthFilter() {
@@ -83,8 +103,9 @@ function buildMonthFilter() {
   if (!select) return;
   const counts = new Map();
   state.spots.forEach((spot) => {
-    const month = getPublishMonth(spot);
-    counts.set(month, (counts.get(month) || 0) + 1);
+    Object.keys(spot.monthly_scores || {}).forEach((month) => {
+      counts.set(month, (counts.get(month) || 0) + 1);
+    });
   });
   [...counts.keys()].sort((a, b) => {
     if (!a) return 1;
@@ -92,7 +113,7 @@ function buildMonthFilter() {
     return Number(a) - Number(b);
   }).forEach((month) => {
     const option = document.createElement('option');
-    option.value = month || '__unknown__';
+    option.value = month;
     option.textContent = `${formatMonth(month)}（${counts.get(month)}）`;
     select.appendChild(option);
   });
@@ -101,8 +122,9 @@ function buildMonthFilter() {
 function updateSummary() {
   const total = state.spots.length;
   const visible = state.filtered.length;
+  const sources = state.spots.reduce((sum, spot) => sum + Number(spot.source_count || 0), 0);
   const generated = state.data?.generated_at ? `，数据生成：${state.data.generated_at}` : '';
-  summary.textContent = `共 ${total} 个入库钓点，当前显示 ${visible} 个${generated}`;
+  summary.textContent = `共 ${total} 个聚合钓点、${sources} 条来源，当前显示 ${visible} 个${generated}`;
 }
 
 function getScoreBand(score) {
@@ -111,8 +133,8 @@ function getScoreBand(score) {
   return SCORE_BANDS.find((band) => value >= band.min) || UNKNOWN_SCORE_BAND;
 }
 
-function getScoreIcon(spot) {
-  const band = getScoreBand(spot.quality_score);
+function getScoreIcon(score) {
+  const band = getScoreBand(score);
   if (iconCache.has(band.label)) return iconCache.get(band.label);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="46" viewBox="0 0 36 46">
     <path d="M18 45S4 28.9 4 16.9C4 7.6 10.3 2 18 2s14 5.6 14 14.9C32 28.9 18 45 18 45Z" fill="${band.color}" stroke="#fff" stroke-width="3"/>
@@ -137,14 +159,7 @@ function renderScoreLegend() {
 }
 
 function getCommentKeywords(spot) {
-  const seen = new Set();
-  return (spot.comment_keywords || [])
-    .map((item) => String(item?.keyword || '').trim())
-    .filter((keyword) => {
-      if (!keyword || seen.has(keyword)) return false;
-      seen.add(keyword);
-      return true;
-    });
+  return (spot.keywords || []).map((keyword) => String(keyword).trim()).filter(Boolean);
 }
 
 function initMap() {
@@ -161,21 +176,30 @@ function initMap() {
 }
 
 function markerHtml(spot) {
-  const band = getScoreBand(spot.quality_score);
+  const month = getSelectedMonth();
+  const stats = getActiveStats(spot, month) || {};
+  const score = getActiveScore(spot, month);
+  const band = getScoreBand(score);
+  const sources = getActiveSources(spot, month);
   const commentKeywords = getCommentKeywords(spot);
   const commentKeywordsHtml = commentKeywords.length
-    ? `<p><b>评论关键词：</b></p><div class="tags">${commentKeywords.map((keyword) => `<span class="tag gray">${escapeHtml(keyword)}</span>`).join('')}</div>`
+    ? `<p><b>高频关键词：</b></p><div class="tags">${commentKeywords.slice(0, 10).map((keyword) => `<span class="tag gray">${escapeHtml(keyword)}</span>`).join('')}</div>`
     : '';
   const fish = (spot.fish_species || []).map((f) => `<span class="tag">${escapeHtml(f)}</span>`).join('') || '<span class="tag gray">鱼种待补充</span>';
-  const url = spot.url ? `<p><a href="${escapeAttr(spot.url)}" target="_blank" rel="noreferrer">打开抖音来源</a></p>` : '';
+  const sourceList = sources.slice(0, 8).map((source) => {
+    const url = source.url ? ` · <a href="${escapeAttr(source.url)}" target="_blank" rel="noreferrer">打开来源</a>` : '';
+    const title = source.title || '未命名来源';
+    return `<li><b>${escapeHtml(source.author || '未知作者')}</b>：${escapeHtml(title)}<br><span class="meta">${escapeHtml(source.publish_time || '-')} · 评分 ${formatScore(source.quality_score)}${url}</span></li>`;
+  }).join('');
+  const more = sources.length > 8 ? `<p class="meta">另有 ${sources.length - 8} 条来源未展开</p>` : '';
+  const scoreLabel = month ? `${formatMonth(month)}评分` : '综合评分';
   return `<div class="info">
     <h3>${escapeHtml(spot.place_name)}</h3>
-    <p><b>钓点评分：</b><span class="score"><i style="--pin-color: ${band.color}"></i>${spot.quality_score ?? '-'} / ${escapeHtml(band.label)}</span> ${spot.quality_score_source ? `(${escapeHtml(spot.quality_score_source)})` : ''}</p>
+    <p><b>${scoreLabel}：</b><span class="score"><i style="--pin-color: ${band.color}"></i>${formatScore(score)} / ${escapeHtml(band.label)}</span></p>
+    <p><b>来源：</b>${stats.source_count || sources.length || 0} 条${stats.score_count ? `，有评分 ${stats.score_count} 条` : ''}${spot.source_count && month ? `；全部 ${spot.source_count} 条` : ''}</p>
     ${commentKeywordsHtml}
     <p><b>鱼种：</b></p><div class="tags">${fish}</div>
-    <p><b>视频：</b>${escapeHtml(spot.title || '-')}</p>
-    <p><b>作者：</b>${escapeHtml(spot.author || '-')}　<b>发布：</b>${escapeHtml(spot.publish_time || '-')}</p>
-    ${url}
+    <p><b>视频来源：</b></p><ol class="source-list">${sourceList || '<li class="meta">当前月份无来源。</li>'}</ol>${more}
   </div>`;
 }
 
@@ -187,7 +211,7 @@ function renderMarkers() {
     const point = new T.LngLat(spot.lng, spot.lat);
     let marker;
     try {
-      marker = new T.Marker(point, { icon: getScoreIcon(spot) });
+      marker = new T.Marker(point, { icon: getScoreIcon(getActiveScore(spot)) });
     } catch (_) {
       marker = new T.Marker(point);
     }
@@ -221,11 +245,16 @@ function renderList() {
     return;
   }
   state.filtered.forEach((spot) => {
-    const band = getScoreBand(spot.quality_score);
+    const month = getSelectedMonth();
+    const stats = getActiveStats(spot, month) || {};
+    const score = getActiveScore(spot, month);
+    const band = getScoreBand(score);
+    const sources = getActiveSources(spot, month);
     const li = document.createElement('li');
     li.className = 'spot-card';
-    li.innerHTML = `<div class="spot-title"><span>${escapeHtml(spot.place_name)}</span><span class="score"><i style="--pin-color: ${band.color}"></i>评分 ${spot.quality_score ?? '-'} / 可信度 ${spot.confidence ?? '-'}</span></div>
-      <div class="meta">${escapeHtml(spot.title || '无标题')}</div>
+    const sourceText = month ? `${formatMonth(month)}来源 ${stats.source_count || sources.length || 0} 条 / 全部 ${spot.source_count || 0} 条` : `来源 ${spot.source_count || sources.length || 0} 条`;
+    li.innerHTML = `<div class="spot-title"><span>${escapeHtml(spot.place_name)}</span><span class="score"><i style="--pin-color: ${band.color}"></i>评分 ${formatScore(score)} / 可信度 ${formatScore(spot.confidence)}</span></div>
+      <div class="meta">${sourceText}${spot.score_min != null && spot.score_max != null ? ` · 来源评分 ${formatScore(spot.score_min)}–${formatScore(spot.score_max)}` : ''}</div>
       <div class="tags">${(spot.fish_species || []).map((f) => `<span class="tag">${escapeHtml(f)}</span>`).join('') || '<span class="tag gray">鱼种待补充</span>'}</div>`;
     li.addEventListener('click', () => openSpot(spot));
     list.appendChild(li);
@@ -242,12 +271,19 @@ function applyFilters() {
   if (scoreValue) scoreValue.textContent = minScore.toFixed(1);
 
   state.filtered = state.spots.filter((spot) => {
-    const text = [spot.place_name, spot.query_name, spot.title, spot.author, ...(spot.fish_species || [])].join('\n').toLowerCase();
+    const activeSources = getActiveSources(spot, month);
+    const text = [
+      spot.place_name,
+      ...(spot.aliases || []),
+      ...(spot.fish_species || []),
+      ...(spot.keywords || []),
+      ...activeSources.flatMap((source) => [source.title, source.author]),
+    ].join('\n').toLowerCase();
     const okQ = !q || text.includes(q);
-    const okFish = !fish || (spot.fish_species || []).includes(fish);
-    const spotMonth = getPublishMonth(spot) || '__unknown__';
-    const okMonth = !month || spotMonth === month;
-    const okScore = Number(spot.quality_score || 0) >= minScore;
+    const activeFish = month ? new Set(activeSources.flatMap((source) => source.fish_species || [])) : new Set(spot.fish_species || []);
+    const okFish = !fish || activeFish.has(fish);
+    const okMonth = !month || Boolean(spot.monthly_scores?.[month]);
+    const okScore = Number(getActiveScore(spot, month) || 0) >= minScore;
     return okQ && okFish && okMonth && okScore;
   });
   updateSummary();

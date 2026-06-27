@@ -23,16 +23,16 @@
   <!-- ══ 底部筛选面板 ══ -->
   <view class="panel {{panelCollapsed ? 'panel--collapsed' : ''}}">
 
-    <!-- 面板头部（点击折叠/展开） -->
+    <!-- 面板头部 -->
     <view class="panel-header" bindtap="onTogglePanel">
       <view class="panel-title">
         <text class="label-brand">寻鱼radar</text>
-        <text class="summary">共 {{total}} 个 · 显示 {{visibleCount}} 个</text>
+        <text class="summary">共 {{total}} 个钓点 · 显示 {{visibleCount}} 个</text>
       </view>
       <text class="panel-arrow">{{panelCollapsed ? '▲' : '▼'}}</text>
     </view>
 
-    <!-- 面板内容（折叠时隐藏） -->
+    <!-- 面板内容 -->
     <view class="panel-body" wx:if="{{!panelCollapsed}}">
 
       <!-- 搜索框 -->
@@ -58,6 +58,31 @@
         </picker>
       </view>
 
+      <!-- 视频月份选择 -->
+      <view class="filter-row">
+        <picker mode="selector" range="{{monthPickerRange}}" bindchange="onMonthChange">
+          <view class="picker-display">
+            <text>📅 {{monthLabel}}</text>
+            <text class="picker-arrow">›</text>
+          </view>
+        </picker>
+      </view>
+
+      <!-- 钓点评分滑块 -->
+      <view class="filter-row">
+        <view class="slider-label">
+          <text>最低钓点评分</text>
+          <text class="slider-value">{{scoreDisplay}}</text>
+        </view>
+        <slider
+          min="0" max="1" step="0.1"
+          value="{{scoreFilter}}"
+          activeColor="#1565C0"
+          bindchange="onScoreChange"
+          bindchanging="onScoreChange"
+        />
+      </view>
+
       <!-- 可信度滑块 -->
       <view class="filter-row">
         <view class="slider-label">
@@ -67,10 +92,21 @@
         <slider
           min="0" max="1" step="0.1"
           value="{{confidenceFilter}}"
-          activeColor="#1565C0"
+          activeColor="#7C4DFF"
           bindchange="onConfidenceChange"
           bindchanging="onConfidenceChange"
         />
+      </view>
+
+      <!-- 评分图例 -->
+      <view class="legend-bar" wx:if="{{scoreBands.length > 0}}">
+        <text class="legend-title">图标颜色</text>
+        <view class="legend-inline">
+          <view wx:for="{{scoreBands}}" wx:key="key" class="legend-dot">
+            <view class="dot" style="background:{{item.color}}"></view>
+            <text>{{item.label}}</text>
+          </view>
+        </view>
       </view>
 
       <!-- 钓点列表 -->
@@ -83,10 +119,18 @@
           bindtap="onSpotTap"
         >
           <view class="spot-header">
-            <text class="spot-name">{{item.place_name}}</text>
-            <text class="spot-conf">{{item.confidence}}</text>
+            <view class="spot-left">
+              <view class="score-badge" style="background:{{item._bandColor}}">
+                {{item._bandKey}}
+              </view>
+              <text class="spot-name">{{item.place_name}}</text>
+            </view>
+            <text class="spot-score">评分 {{item._score}}</text>
           </view>
-          <view class="spot-title-text">{{item.title || '无标题'}}</view>
+          <view class="spot-meta">
+            <text>来源 {{item.source_count || 0}} 条</text>
+            <text wx:if="{{item.score_min != null}}"> · 评分 {{item._scoreMin}}–{{item._scoreMax}}</text>
+          </view>
           <view class="tag-row">
             <text
               wx:for="{{item.fish_species}}"
@@ -108,50 +152,78 @@
   <view class="detail-mask" wx:if="{{detailVisible}}" bindtap="onCloseDetail" />
   <view class="detail-sheet" wx:if="{{detailVisible && selectedSpot}}">
     <view class="detail-close" bindtap="onCloseDetail">✕</view>
-    <view class="detail-name">{{selectedSpot.place_name}}</view>
+
+    <!-- 名称 + 评分带 -->
+    <view class="detail-name-row">
+      <view class="score-badge-lg" style="background:{{selectedSpot._bandColor}}">{{selectedSpot._bandKey}}</view>
+      <text class="detail-name">{{selectedSpot.place_name}}</text>
+    </view>
+
+    <!-- 评分信息 -->
+    <view class="detail-row">
+      <text class="detail-label">{{monthFilter ? monthFilter + '月评分' : '综合评分'}}</text>
+      <text class="detail-val highlight">{{selectedSpot._score}} / {{selectedSpot._bandLabel}}</text>
+    </view>
 
     <view class="detail-row">
-      <text class="detail-label">经纬度</text>
-      <text class="detail-val">{{selectedSpot.lng}}, {{selectedSpot.lat}}</text>
+      <text class="detail-label">来源</text>
+      <text class="detail-val">{{selectedSpot._sourceCount || selectedSpot.source_count || 0}} 条{{selectedSpot.score_count ? '，有评分 ' + selectedSpot.score_count + ' 条' : ''}}</text>
     </view>
-    <view class="detail-row">
-      <text class="detail-label">地理级别</text>
-      <text class="detail-val">{{selectedSpot.geocode_level || '-'}} / score {{selectedSpot.geocode_score || '-'}}</text>
-    </view>
+
     <view class="detail-row">
       <text class="detail-label">可信度</text>
       <text class="detail-val">{{selectedSpot.confidence || '-'}}</text>
     </view>
-    <view class="detail-row">
-      <text class="detail-label">作者</text>
-      <text class="detail-val">{{selectedSpot.author || '-'}}</text>
-    </view>
-    <view class="detail-row">
-      <text class="detail-label">发布时间</text>
-      <text class="detail-val">{{selectedSpot.publish_time || '-'}}</text>
+
+    <!-- 评论关键词 -->
+    <view class="detail-row detail-row--col" wx:if="{{selectedSpot._keywords.length > 0}}">
+      <text class="detail-label">高频关键词</text>
+      <view class="tag-row">
+        <text wx:for="{{selectedSpot._keywords}}" wx:key="*this" wx:for-item="kw" class="tag tag-gray">{{kw}}</text>
+      </view>
     </view>
 
+    <!-- 鱼种 -->
     <view class="detail-row detail-row--col">
       <text class="detail-label">鱼种</text>
       <view class="tag-row">
-        <text
-          wx:for="{{selectedSpot.fish_species}}"
-          wx:for-item="fish"
-          wx:key="fish"
-          class="tag"
-        >{{fish}}</text>
+        <text wx:for="{{selectedSpot.fish_species}}" wx:for-item="fish" wx:key="fish" class="tag">{{fish}}</text>
         <text wx:if="{{!selectedSpot.fish_species || selectedSpot.fish_species.length === 0}}" class="tag tag-gray">鱼种待补充</text>
       </view>
     </view>
 
-    <view class="detail-row detail-row--col">
-      <text class="detail-label">视频标题</text>
-      <text class="detail-title-text">{{selectedSpot.title || '-'}}</text>
+    <!-- 分月评分概览 -->
+    <view class="detail-row detail-row--col" wx:if="{{selectedSpot._monthlyScores.length > 0}}">
+      <text class="detail-label">各月评分</text>
+      <view class="month-scores">
+        <view wx:for="{{selectedSpot._monthlyScores}}" wx:key="month" wx:for-item="ms" class="month-chip">
+          <text class="month-label">{{ms.label}}</text>
+          <text class="month-val">{{ms.score}}</text>
+        </view>
+      </view>
     </view>
 
-    <view wx:if="{{selectedSpot.url}}" class="copy-btn" data-url="{{selectedSpot.url}}" bindtap="onOpenUrl">
-      复制抖音链接
+    <!-- 视频来源列表 -->
+    <view class="detail-row detail-row--col" wx:if="{{selectedSpot._sources.length > 0}}">
+      <text class="detail-label">视频来源</text>
+      <view class="source-list">
+        <view wx:for="{{selectedSpot._sources}}" wx:key="id" wx:for-item="src" class="source-item">
+          <view class="source-header">
+            <text class="source-author">{{src.author || '未知作者'}}</text>
+            <text class="source-score">评分 {{src._score}}</text>
+          </view>
+          <text class="source-title">{{src.title || '未命名'}}</text>
+          <view class="source-footer">
+            <text class="source-time">{{src.publish_time || '-'}}</text>
+            <text wx:if="{{src.url}}" class="source-link" data-url="{{src.url}}" catchtap="onOpenUrl">复制链接</text>
+          </view>
+        </view>
+        <view wx:if="{{selectedSpot._sourcesMore > 0}}" class="source-more">
+          另有 {{selectedSpot._sourcesMore}} 条来源未展开
+        </view>
+      </view>
     </view>
+
   </view>
 
 </view>

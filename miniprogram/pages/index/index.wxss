@@ -1,6 +1,6 @@
 /* pages/index/index.wxss */
 
-/* ── 根容器（全屏，地图在下方，面板浮在上方） ── */
+/* ── 根容器 ── */
 .root {
   position: relative;
   width: 100%;
@@ -142,6 +142,43 @@
   font-weight: 500;
 }
 
+/* ── 评分图例 ── */
+.legend-bar {
+  margin-bottom: 14rpx;
+  padding: 16rpx 20rpx;
+  background: #f8fafc;
+  border-radius: 14rpx;
+  border: 1rpx solid #e3eaf2;
+  margin-left: 20rpx;
+  margin-right: 20rpx;
+}
+.legend-title {
+  font-size: 22rpx;
+  font-weight: 500;
+  color: #30433d;
+  display: block;
+  margin-bottom: 10rpx;
+}
+.legend-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8rpx 16rpx;
+}
+.legend-dot {
+  display: flex;
+  align-items: center;
+  gap: 6rpx;
+  font-size: 20rpx;
+  color: #66736f;
+}
+.dot {
+  width: 16rpx;
+  height: 16rpx;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 2rpx rgba(255,255,255,.9);
+}
+
 /* ── 钓点列表 ── */
 .spot-list {
   flex: 1;
@@ -156,31 +193,51 @@
 }
 .spot-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   margin-bottom: 8rpx;
+  gap: 10rpx;
+}
+.spot-left {
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+  flex: 1;
+  min-width: 0;
+}
+/* 评分颜色徽章（列表卡片） */
+.score-badge {
+  width: 36rpx;
+  height: 36rpx;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18rpx;
+  font-weight: 700;
+  color: #ffffff;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 3rpx rgba(255,255,255,.9), 0 0 0 5rpx rgba(10,25,41,.08);
 }
 .spot-name {
   font-size: 28rpx;
   font-weight: 500;
   color: #14231f;
-  flex: 1;
-  margin-right: 10rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.spot-conf {
+.spot-score {
   font-size: 22rpx;
   color: #1565C0;
   white-space: nowrap;
+  flex-shrink: 0;
 }
-.spot-title-text {
-  font-size: 22rpx;
+.spot-meta {
+  font-size: 20rpx;
   color: #66736f;
-  line-height: 1.45;
   margin-bottom: 10rpx;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
+  padding-left: 46rpx;
 }
 
 /* ── 标签 ── */
@@ -188,7 +245,8 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8rpx;
-  margin-top: 6rpx;
+  margin-top: 4rpx;
+  padding-left: 46rpx;
 }
 .tag {
   font-size: 22rpx;
@@ -238,13 +296,35 @@
   color: #66736f;
   padding: 10rpx;
 }
+
+/* 详情：名称 + 评分徽章 */
+.detail-name-row {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  margin-bottom: 24rpx;
+  padding-right: 60rpx;
+}
+.score-badge-lg {
+  width: 52rpx;
+  height: 52rpx;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22rpx;
+  font-weight: 700;
+  color: #ffffff;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 3rpx rgba(255,255,255,.9), 0 0 0 5rpx rgba(10,25,41,.08);
+}
 .detail-name {
   font-size: 36rpx;
   font-weight: 500;
   color: #14231f;
-  margin-bottom: 24rpx;
-  padding-right: 60rpx;
+  flex: 1;
 }
+
 .detail-row {
   display: flex;
   align-items: center;
@@ -259,7 +339,7 @@
 .detail-label {
   font-size: 24rpx;
   color: #66736f;
-  width: 140rpx;
+  width: 160rpx;
   flex-shrink: 0;
 }
 .detail-val {
@@ -267,18 +347,91 @@
   color: #14231f;
   flex: 1;
 }
-.detail-title-text {
-  font-size: 24rpx;
-  color: #344842;
-  line-height: 1.55;
-}
-.copy-btn {
-  margin-top: 28rpx;
-  background: #1565C0;
-  color: #ffffff;
-  font-size: 28rpx;
+.detail-val.highlight {
+  color: #1565C0;
   font-weight: 500;
+}
+
+/* ── 分月评分芯片 ── */
+.month-scores {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx;
+  width: 100%;
+}
+.month-chip {
+  display: flex;
+  align-items: center;
+  gap: 6rpx;
+  background: #f0f4f8;
+  border-radius: 12rpx;
+  padding: 8rpx 16rpx;
+}
+.month-label {
+  font-size: 22rpx;
+  font-weight: 500;
+  color: #30433d;
+}
+.month-val {
+  font-size: 22rpx;
+  font-weight: 700;
+  color: #1565C0;
+}
+
+/* ── 视频来源列表 ── */
+.source-list {
+  width: 100%;
+}
+.source-item {
+  padding: 16rpx;
+  margin-bottom: 10rpx;
+  background: #f8fafc;
+  border-radius: 12rpx;
+  border: 1rpx solid #eef2f7;
+}
+.source-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6rpx;
+}
+.source-author {
+  font-size: 24rpx;
+  font-weight: 500;
+  color: #14231f;
+}
+.source-score {
+  font-size: 20rpx;
+  color: #1565C0;
+  font-weight: 500;
+}
+.source-title {
+  font-size: 22rpx;
+  color: #66736f;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin-bottom: 8rpx;
+}
+.source-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.source-time {
+  font-size: 20rpx;
+  color: #999;
+}
+.source-link {
+  font-size: 22rpx;
+  color: #1565C0;
+  font-weight: 500;
+}
+.source-more {
+  font-size: 22rpx;
+  color: #999;
   text-align: center;
-  padding: 22rpx;
-  border-radius: 18rpx;
+  padding: 16rpx;
 }

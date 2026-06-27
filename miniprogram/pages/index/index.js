@@ -16,20 +16,27 @@ Page({
     total: 0,
     visibleCount: 0,
     generatedAt: '',
-    spots: [],        // 当前筛选后列表
-    allFish: [],      // 鱼种选项
-    fishPickerRange: [], // picker 选项（含"全部鱼种"头）
+    spots: [],
+    // 选项数据
+    allFish: [],
+    fishPickerRange: [],
+    monthPickerRange: [],
+    scoreBands: [],       // 图例
     // 筛选条件
     searchQuery: '',
     fishFilter: '',
+    monthFilter: '',       // 空=全部月份
+    monthLabel: '全部月份',
+    scoreFilter: 0,
+    scoreDisplay: '0.0',
     confidenceFilter: 0,
     confidenceDisplay: '0.0',
-    // 当前选中的钓点（底部弹出详情）
+    // 当前选中钓点（底部详情）
     selectedSpot: null,
     detailVisible: false,
-    // 面板折叠（手机小屏时默认折叠列表）
+    // 面板折叠
     panelCollapsed: false,
-    // 卫星图开关
+    // 卫星图
     enableSatellite: false,
     mapTypeBtnText: '切换卫星图',
   },
@@ -37,19 +44,35 @@ Page({
   onLoad() {
     const allFish = dataUtils.getAllFishSpecies()
     const fishPickerRange = ['全部鱼种', ...allFish]
+    const monthPickerRange = dataUtils.getMonthPickerRange()
     const filtered = dataUtils.filterSpots()
+    const spots = filtered.map((s) => {
+      const score = dataUtils.getActiveScore(s, '')
+      const band = dataUtils.getScoreBand(score)
+      return {
+        ...s,
+        _bandColor: band.color,
+        _bandKey: band.key,
+        _bandLabel: band.label,
+        _score: dataUtils.formatScore(score),
+        _scoreMin: dataUtils.formatScore(s.score_min),
+        _scoreMax: dataUtils.formatScore(s.score_max),
+      }
+    })
     const markers = dataUtils.spotsToMarkers(filtered)
+
     this.setData({
       total: dataUtils.TOTAL,
-      visibleCount: filtered.length,
+      visibleCount: spots.length,
       generatedAt: dataUtils.GENERATED_AT,
-      spots: filtered,
+      spots,
       allFish,
       fishPickerRange,
+      monthPickerRange,
+      scoreBands: [...dataUtils.SCORE_BANDS, dataUtils.UNKNOWN_BAND],
       markers,
     })
-    // 自动缩放到所有钓点
-    this._fitToMarkers(filtered)
+    this._fitToMarkers(spots)
   },
 
   // ─── 筛选事件 ────────────────────────────────────────────────
@@ -59,11 +82,27 @@ Page({
   },
 
   onFishChange(e) {
-    // picker 返回 value 为 range 数组的 index
     const idx = Number(e.detail.value)
-    // fishPickerRange[0] = '全部鱼种' → 不过滤
     const fish = idx === 0 ? '' : this.data.fishPickerRange[idx]
     this.setData({ fishFilter: fish }, () => this._applyFilters())
+  },
+
+  onMonthChange(e) {
+    const idx = Number(e.detail.value)
+    const allMonths = dataUtils.getAllMonths()
+    const month = idx === 0 ? '' : allMonths[idx - 1]
+    this.setData({
+      monthFilter: month,
+      monthLabel: month ? allMonths[idx - 1] + '月' : '全部月份',
+    }, () => this._applyFilters())
+  },
+
+  onScoreChange(e) {
+    const val = Number(e.detail.value)
+    this.setData(
+      { scoreFilter: val, scoreDisplay: val.toFixed(1) },
+      () => this._applyFilters(),
+    )
   },
 
   onConfidenceChange(e) {
@@ -75,25 +114,40 @@ Page({
   },
 
   _applyFilters() {
+    const month = this.data.monthFilter
     const filtered = dataUtils.filterSpots({
       query: this.data.searchQuery,
       fish: this.data.fishFilter,
+      month: month,
+      minScore: this.data.scoreFilter,
       minConf: this.data.confidenceFilter,
     })
-    const markers = dataUtils.spotsToMarkers(filtered)
-    this.setData({ spots: filtered, visibleCount: filtered.length, markers })
-    this._fitToMarkers(filtered)
+    // 预计算每个 spot 的评分带和显示用评分，供 WXML 模板直接使用
+    const spots = filtered.map((s) => {
+      const score = dataUtils.getActiveScore(s, month)
+      const band = dataUtils.getScoreBand(score)
+      return {
+        ...s,
+        _bandColor: band.color,
+        _bandKey: band.key,
+        _bandLabel: band.label,
+        _score: dataUtils.formatScore(score),
+        _scoreMin: dataUtils.formatScore(s.score_min),
+        _scoreMax: dataUtils.formatScore(s.score_max),
+      }
+    })
+    const markers = dataUtils.spotsToMarkers(filtered, month)
+    this.setData({ spots, visibleCount: spots.length, markers })
+    this._fitToMarkers(spots)
   },
 
   // ─── 地图事件 ────────────────────────────────────────────────
 
   onMarkerTap(e) {
-    const markerId = e.detail.markerId
-    const spot = this.data.spots.find((s) => s.id === markerId)
+    const markerId = Number(e.detail.markerId)
+    const spot = this.data.spots.find((s) => Number(String(s.id).replace(/[^0-9]/g, '')) === markerId)
     if (!spot) return
-    this.setData({ selectedSpot: spot, detailVisible: true })
-    // 地图平移到该点
-    this.setData({ longitude: spot.lng, latitude: spot.lat })
+    this._openSpot(spot)
   },
 
   onFitAll() {
@@ -108,10 +162,6 @@ Page({
     })
   },
 
-  /**
-   * 自动缩放地图以包含所有钓点
-   * 小程序 map 组件通过 MapContext.includePoints 实现
-   */
   _fitToMarkers(spots) {
     if (!spots || spots.length === 0) return
     if (!this._mapCtx) {
@@ -130,8 +180,39 @@ Page({
     const idx = e.currentTarget.dataset.idx
     const spot = this.data.spots[idx]
     if (!spot) return
+    this._openSpot(spot)
+  },
+
+  _openSpot(spot) {
+    const score = dataUtils.getActiveScore(spot, this.data.monthFilter)
+    const band = dataUtils.getScoreBand(score)
+    const sources = dataUtils.getActiveSources(spot, this.data.monthFilter)
+    const keywords = (spot.keywords || []).slice(0, 10)
+    const monthlyKeys = Object.keys(spot.monthly_scores || {}).sort((a, b) => Number(a) - Number(b))
+    const _monthlyScores = monthlyKeys.map((m) => ({
+      month: m,
+      label: m + '月',
+      score: dataUtils.formatScore(spot.monthly_scores[m].quality_score),
+      count: spot.monthly_scores[m].source_count || 0,
+    }))
+
     this.setData({
-      selectedSpot: spot,
+      selectedSpot: {
+        ...spot,
+        _score: dataUtils.formatScore(score),
+        _bandLabel: band.label,
+        _bandColor: band.color,
+        _bandKey: band.key,
+        _sources: (sources || []).slice(0, 8).map((s) => ({
+          ...s,
+          _score: dataUtils.formatScore(s.quality_score),
+        })),
+        _sourcesMore: (sources || []).length > 8 ? (sources.length - 8) : 0,
+        _sourceCount: (sources || []).length,
+        _keywords: keywords,
+        _monthlyKeys: monthlyKeys,
+        _monthlyScores,
+      },
       detailVisible: true,
       longitude: spot.lng,
       latitude: spot.lat,

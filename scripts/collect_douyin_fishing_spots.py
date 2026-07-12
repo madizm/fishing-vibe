@@ -1180,19 +1180,40 @@ def sleep_between_items(index: int, total: int, delay_min: float, delay_max: flo
 
 def geocode(place: str, city: str = "武汉") -> dict | None:
     query = place if place.startswith(city) else f"{city}{place}"
-    out = run([sys.executable, str(GEOCODE_SCRIPT), "-p", "baidu", "geocode", "--to", "wgs84", query], timeout=60)
+    out = run([
+        sys.executable,
+        str(GEOCODE_SCRIPT),
+        "-p",
+        "baidu",
+        "geocode",
+        "--to",
+        "wgs84",
+        "--autocorrect",
+        "--region",
+        city,
+        query,
+    ], timeout=60)
     data = json.loads(out)
     # 百度地图返回 status 为整数 0
     if data.get("status") != 0 or "result" not in data:
         return None
     result = data["result"]
     loc = result["location"]
+    autocorrect = data.get("_autocorrect") or {}
+    corrected_query = autocorrect.get("corrected_query") or result.get("name") or query
+    if autocorrect.get("applied"):
+        print(f"[geocode] autocorrect: {query} -> {corrected_query}", file=sys.stderr, flush=True)
     return {
-        "query_name": query,
+        "query_name": corrected_query if autocorrect.get("applied") else query,
         "longitude": float(loc["lng"]),
         "latitude": float(loc["lat"]),
         "geocode_score": int(result.get("confidence", 0)),
         "geocode_level": result.get("level", ""),
+        "geocode_autocorrected": bool(autocorrect.get("applied")),
+        "geocode_original_query": autocorrect.get("original_query", query),
+        "geocode_corrected_query": corrected_query if autocorrect.get("applied") else "",
+        "geocode_address": result.get("address", ""),
+        "geocode_area": result.get("area", ""),
     }
 
 

@@ -125,6 +125,7 @@ def convert_coords(lon: float, lat: float, from_sys: str, to_sys: str) -> tuple[
 # 百度地图
 BAIDU_GEOCODE_URL = "https://api.map.baidu.com/geocoding/v3"
 BAIDU_REVERSE_URL = "https://api.map.baidu.com/reverse_geocoding/v3"
+BAIDU_PLACE_SEARCH_URL = "https://api.map.baidu.com/place/v2/search"
 BAIDU_ENV_KEY = "BAIDU_AK"
 
 # 天地图
@@ -192,6 +193,125 @@ def baidu_geocode(address: str, ak: str) -> dict:
     return request_json(f"{BAIDU_GEOCODE_URL}?{query}", "百度地图")
 
 
+def baidu_place_search(query_text: str, ak: str, region: str = "", limit: int = 10) -> dict:
+    """百度 POI 搜索，用于地理编码低置信度时的候选纠错。"""
+    params = {
+        "query": query_text,
+        "output": "json",
+        "ak": ak,
+        "page_size": max(1, min(int(limit), 20)),
+    }
+    if region:
+        params["region"] = region
+    query = urllib.parse.urlencode(params)
+    return request_json(f"{BAIDU_PLACE_SEARCH_URL}?{query}", "百度地图POI搜索")
+
+
+def _baidu_geocode_needs_autocorrect(result: dict, min_confidence: int = 80) -> bool:
+    if result.get("status") != 0:
+        return True
+    payload = result.get("result") or {}
+    if "location" not in payload:
+        return True
+    level = str(payload.get("level", ""))
+    confidence = int(payload.get("confidence") or 0)
+    return confidence < min_confidence
+
+
+def _simplify_baidu_place_candidate(item: dict) -> dict:
+    loc = item.get("location") or {}
+    return {
+        "name": item.get("name", ""),
+        "address": item.get("address", ""),
+        "province": item.get("province", ""),
+        "city": item.get("city", ""),
+        "area": item.get("area", ""),
+        "uid": item.get("uid", ""),
+        "location": {"lng": loc.get("lng"), "lat": loc.get("lat")},
+    }
+
+
+def baidu_geocode_with_autocorrect(
+    address: str,
+    ak: str,
+    region: str = "",
+    min_confidence: int = 80,
+    candidate_limit: int = 8,
+) -> dict:
+    """先地理编码；低置信度时用百度 POI 搜索返回更可能的候选。
+
+    不静默纠错：返回体会包含 `_autocorrect`，标明原查询、纠正后的 POI 名称、
+    是否应用纠错，以及原始地理编码结果。
+    """
+    original = baidu_geocode(address, ak)
+    if not _baidu_geocode_needs_autocorrect(original, min_confidence=min_confidence):
+        original.setdefault("_autocorrect", {
+            "applied": False,
+            "original_query": address,
+            "reason": "geocode_confidence_ok",
+        })
+        return original
+
+    try:
+        search = baidu_place_search(address, ak, region=region, limit=candidate_limit)
+    except Exception as exc:
+        original["_autocorrect"] = {
+            "applied": False,
+            "original_query": address,
+            "reason": "poi_search_failed",
+            "error": str(exc),
+            "original_result": original.get("result"),
+        }
+        return original
+
+    candidates = [_simplify_baidu_place_candidate(item) for item in search.get("results", [])]
+    best = candidates[0] if candidates else None
+    if not best or not best.get("location", {}).get("lng") or not best.get("location", {}).get("lat"):
+        original["_autocorrect"] = {
+            "applied": False,
+            "original_query": address,
+            "reason": "no_poi_candidate",
+            "original_result": original.get("result"),
+        }
+        original["candidates"] = candidates
+        return original
+
+    # 百度 Place Search 未返回置信度。能排到首位且 query_type=precise 时给高置信度，
+    # 否则给中高置信度，便于下游区分“POI纠错结果”和普通低置信度 geocode。
+    query_type = str(search.get("query_type", ""))
+    confidence = 90 if query_type == "precise" else 85
+    corrected = {
+        "status": 0,
+        "result": {
+            "location": {
+                "lng": float(best["location"]["lng"]),
+                "lat": float(best["location"]["lat"]),
+            },
+            "precise": 1,
+            "confidence": confidence,
+            "comprehension": 100,
+            "level": "POI",
+            "name": best.get("name", ""),
+            "address": best.get("address", ""),
+            "province": best.get("province", ""),
+            "city": best.get("city", ""),
+            "area": best.get("area", ""),
+        },
+        "_autocorrect": {
+            "applied": True,
+            "original_query": address,
+            "corrected_query": best.get("name", ""),
+            "region": region,
+            "reason": "geocode_low_confidence_poi_candidate",
+            "original_result": original.get("result"),
+            "poi_query_type": query_type,
+            "poi_result_type": search.get("result_type", ""),
+        },
+        "candidates": candidates,
+    }
+    return corrected
+
+
 def baidu_reverse_geocode(lon: float, lat: float, ak: str) -> dict:
     if not (-180 <= lon <= 180 and -90 <= lat <= 90):
         raise ValueError("经纬度超出范围：lon 应在 [-180,180]，lat 应在 [-90,90]")
@@ -233,6 +353,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--to", dest="to_coords",
         choices=["bd09", "gcj02", "wgs84"],
         help="输出坐标系（默认与提供商一致：baidu->bd09, tianditu->wgs84）",
+    )
+    p_geocode.add_argument(
+        "--autocorrect",
+        action="store_true",
+        help="百度地图低置信度时启用 POI 搜索纠错；返回 _autocorrect 和 candidates",
+    )
+    p_geocode.add_argument(
+        "--region",
+        default="",
+        help="POI 纠错限定区域/城市，例如 武汉；仅 --provider baidu --autocorrect 使用",
+    )
+    p_geocode.add_argument(
+        "--min-confidence",
+        type=int,
+        default=80,
+        help="触发 POI 纠错的百度 geocode 最低置信度（默认 80）",
     )
 
     p_reverse = subparsers.add_parser("reverse", help="经纬度 -> 地址")
@@ -281,7 +417,15 @@ def main() -> None:
 
     try:
         if args.command == "geocode":
-            result = geocode_fn(args.address, key)
+            if provider == "baidu" and getattr(args, "autocorrect", False):
+                result = baidu_geocode_with_autocorrect(
+                    args.address,
+                    key,
+                    region=getattr(args, "region", ""),
+                    min_confidence=getattr(args, "min_confidence", 80),
+                )
+            else:
+                result = geocode_fn(args.address, key)
             # 自动坐标转换
             if hasattr(args, "to_coords") and args.to_coords:
                 _apply_coords_transform(result, provider, args.to_coords)

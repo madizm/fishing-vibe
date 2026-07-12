@@ -72,6 +72,27 @@ python3 geocode.py geocode "北京市海淀区上地十街10号"
 python3 geocode.py -p baidu geocode "北京市海淀区上地十街10号"
 ```
 
+### 地理编码：百度 POI 自动纠错
+
+当普通地理编码置信度低时，可启用百度 POI 搜索纠错。纠错不会静默发生：返回 JSON 会包含 `_autocorrect` 和 `candidates`。
+
+```bash
+python3 geocode.py -p baidu geocode --to wgs84 --autocorrect --region 武汉 "建设十路清新居"
+```
+
+示例要点：
+
+```json
+{
+  "result": {"name": "建设十路青馨居", "location": {"lng": 114.407156, "lat": 30.626751}},
+  "_autocorrect": {
+    "applied": true,
+    "original_query": "建设十路清新居",
+    "corrected_query": "建设十路青馨居"
+  }
+}
+```
+
 ### 逆地理编码：经纬度 → 地址
 
 默认使用天地图：
@@ -97,6 +118,7 @@ python3 geocode.py -p baidu reverse 116.308149542 40.056885091
 | `--provider` / `-p` | 提供商：`baidu` 或 `tianditu`（默认 `tianditu`） |
 | `geocode <address>` | 地址/地名 → 经纬度 |
 | `geocode --to <system>` | 自动转换坐标系（`bd09`/`gcj02`/`wgs84`） |
+| `geocode --autocorrect --region <city>` | 百度低置信度时用 POI 搜索自动纠错 |
 | `reverse <lon> <lat>` | 经纬度 → 地址 |
 | `convert --from <sys> --to <sys> <lon> <lat> ...` | 批量坐标转换 |
 
@@ -214,7 +236,7 @@ python3 geocode.py convert --from bd09 --to wgs84 116.308149542 40.056885091 116
 1. 判断用户需求：地址转坐标，还是坐标转地址。
 2. 选择提供商（默认 `tianditu`，用户可指定 `baidu`）。
 3. 确认对应密钥可用（`TIANDITU_TK` 或 `BAIDU_AK`）；没有则要求用户提供并写入项目根目录 `.env`。
-4. 使用 `python3 geocode.py -p <provider> geocode <地址>` 或 `python3 geocode.py -p <provider> reverse <lon> <lat>`。
+4. 使用 `python3 geocode.py -p <provider> geocode <地址>` 或 `python3 geocode.py -p <provider> reverse <lon> <lat>`。如果中文 POI 可能有同音/错字，优先用百度：`python3 geocode.py -p baidu geocode --autocorrect --region <城市> <地址>`。
 5. 检查返回状态：
    - 百度地图：`status == 0`
    - 天地图：`status == "0"`

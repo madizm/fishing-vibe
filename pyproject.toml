@@ -1,0 +1,18 @@
+[project]
+name = "fishing-vibe"
+version = "0.1.0"
+description = "Fishing-spot map built from Douyin videos: collect, geocode, score, export"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv]
+# DrvFS (/mnt/d) rejects the copy-metadata step of installing the project wheel;
+# the repo is run from source (scripts bootstrap sys.path), so no package build is needed.
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+addopts = "-p no:cacheprovider"  # DrvFS (/mnt/d) rejects the cache dir

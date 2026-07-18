@@ -27,86 +27,27 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))  # allow running the script directly without installing the package
+
+from spot_intake.extract import (
+    aggregate_comment_keywords,
+    aggregate_quality_scores,
+    clean_text_for_llm,
+    extract_comment_spot_clues_from_comments,
+    extract_fish_species,
+    format_comments_for_llm,
+    normalize_fish_species,
+    normalize_quality_score,
+    parse_douyin_comment_time,
+)
+from spot_intake.extract import dedupe_places as _dedupe_places
+from spot_intake.extract import normalize_comment_keyword as _normalize_comment_keyword
+from spot_intake.extract import normalize_comment_keyword_category as _normalize_comment_keyword_category
+from spot_intake.vocabulary import COMMENT_KEYWORD_CATEGORIES, FISH_PATTERNS, PLACE_PATTERNS
+
 DB_PATH = ROOT / "data" / "fishing_spots.sqlite"
 GEOCODE_SCRIPT = ROOT / ".agents" / "skills" / "geocode" / "geocode.py"
 
-# Fallback tokens when the local OpenAI-compatible LLM is unavailable.
-# The primary extractor below asks the LLM to return place names from title/description/page text.
-PLACE_PATTERNS = [
-    "野芷湖公园", "野芷湖", "东荆河", "倒水河", "汉江", "长江", "府河", "滠水河",
-    "汤逊湖", "梁子湖", "后官湖", "严西湖", "严东湖", "金银湖", "墨水湖", "南湖",
-    "蔡甸江滩", "汉口江滩", "武昌江滩", "联丰村", "走马岭水厂",
-]
-COMMENT_PLACE_HINTS = [
-    "江", "河", "湖", "水库", "江滩", "闸", "桥", "泵站", "水厂", "码头", "村", "湾", "港", "沟", "渠", "公园",
-]
-COMMENT_NOISE = {"全部评论", "留下你的精彩评论吧", "大家都在搜：", "分享", "回复", "作者", "加载中", "关注", "推荐视频"}
-COMMENT_KEYWORD_CATEGORIES = {
-    "place": "钓点/地名",
-    "fish": "鱼种",
-    "fish_condition": "鱼情/口况",
-    "water_condition": "水情",
-    "access": "交通/停车/到达难度",
-    "restriction": "禁钓/收费/管理/风险",
-    "bait_method": "饵料/钓法/装备",
-    "quality": "总体评价/建议",
-}
-COMMENT_KEYWORD_CATEGORY_ALIASES = {
-    "地点": "place",
-    "地名": "place",
-    "钓点": "place",
-    "鱼": "fish",
-    "鱼种": "fish",
-    "鱼情": "fish_condition",
-    "口况": "fish_condition",
-    "水情": "water_condition",
-    "交通": "access",
-    "停车": "access",
-    "限制": "restriction",
-    "禁钓": "restriction",
-    "风险": "restriction",
-    "饵料": "bait_method",
-    "钓法": "bait_method",
-    "装备": "bait_method",
-    "评价": "quality",
-    "质量": "quality",
-}
-LLM_TEXT_NOISE = {
-    "读屏标签已关闭", "精选", "推荐", "搜索", "关注", "朋友", "我的", "直播", "放映厅", "短剧", "小游戏",
-    "下载抖音精选", "播放", "进入全屏H", "网页全屏Y", "截图", "小窗模式U", "字幕", "不 开启", "不开启",
-    "稍后再看L", "倍速", "高清 1080P", "高清 720P", "智能", "清屏", "清屏J", "连播", "自动连播K",
-    "听抖音", "重播", "举报", "推荐视频", "点击按住可拖动视频", "3s 后播放", "3s 后播放下一个视频",
-    "3s 后循环播放当前视频", "全部评论", "留下你的精彩评论吧",
-}
-LLM_TEXT_KEEP_HINTS = [
-    "#", "钓", "鱼", "江", "河", "湖", "水库", "江滩", "闸", "桥", "泵站", "水厂", "码头", "村", "湾", "港",
-    "章节要点", "引言", "鱼情", "钓获", "发布时间", "作者", "粉丝", "获赞",
-]
-
-# Fish species aliases commonly appearing in Wuhan fishing videos.
-# Keys are canonical names persisted into DB; values are surface forms used by
-# rules and by the LLM normalizer below. Keep longer/more specific aliases first
-# where ambiguity exists (e.g. 青尾鲴 before 青尾).
-FISH_PATTERNS = {
-    "黄尾鲴": ["黄尾鲴", "黄尾", "黄片", "黄尾巴"],
-    "青尾鲴": ["青尾鲴", "青尾鲴鱼", "青尾", "青尾巴"],
-    "鲫鱼": ["工程鲫", "板鲫", "大板鲫", "斤鲫", "土鲫", "野鲫", "鲫鱼"],
-    "鲤鱼": ["大鲤鱼", "巨鲤", "拐子", "鲤鱼"],
-    "草鱼": ["草鱼", "草混", "草棒"],
-    "鳊鱼": ["武昌鱼", "鳊鱼"],
-    "翘嘴": ["翘嘴红鲌", "大翘嘴", "翘壳", "翘嘴", "白鱼"],
-    "罗非鱼": ["罗非鱼", "非洲鲫", "罗非"],
-    "鲢鳙": ["花鲢", "白鲢", "胖头鱼", "大头鱼", "鲢鳙", "鲢鱼", "鳙鱼"],
-    "鲮鱼": ["土鲮", "麦鲮", "泰鲮", "小鲮鱼", "鲮鱼"],
-    "黑鱼": ["乌鳢", "乌鱼", "财鱼", "黑鱼"],
-    "鳜鱼": ["桂鱼", "季花鱼", "鳜鱼"],
-    "黄颡鱼": ["黄颡鱼", "黄骨鱼", "昂刺鱼", "黄辣丁", "黄鸭叫", "黄骨", "黄颡"],
-    "鲶鱼": ["鲶鱼", "塘鲺", "胡子鲶"],
-    "鲈鱼": ["鲈鱼", "海鲈", "七星鲈"],
-    "红尾": ["红尾", "红尾鱼"],
-    "马口": ["马口", "马口鱼"],
-    "白条": ["白条", "餐条", "参条", "蓝刀"],
-}
 DEFAULT_LLM_URL = os.getenv("OPENAI_BASE_URL", "http://100.90.54.85:8080/v1").rstrip("/") + "/chat/completions"
 
 
@@ -265,72 +206,6 @@ def browser_eval(session: str, js: str) -> object:
     return json.loads(out)
 
 
-def _days_in_month(year: int, month: int) -> int:
-    if month == 12:
-        next_month = datetime(year + 1, 1, 1)
-    else:
-        next_month = datetime(year, month + 1, 1)
-    return (next_month - timedelta(days=1)).day
-
-
-def _shift_months(dt: datetime, months: int) -> datetime:
-    month_index = dt.month - 1 + months
-    year = dt.year + month_index // 12
-    month = month_index % 12 + 1
-    day = min(dt.day, _days_in_month(year, month))
-    return dt.replace(year=year, month=month, day=day)
-
-
-def parse_douyin_comment_time(value: str, now: datetime | None = None) -> str:
-    """Parse Douyin's approximate comment time into YYYY-MM-DD HH:MM:SS.
-
-    Relative times such as "1周前" and "8月前" are approximate: weeks use
-    7-day deltas, while months/years use calendar month shifts with day clamping.
-    """
-    now = now or datetime.now()
-    text = re.sub(r"\s+", " ", str(value or "").strip())
-    text = text.split("·", 1)[0].strip()
-    if not text:
-        return ""
-
-    if text == "刚刚":
-        return now.strftime("%Y-%m-%d %H:%M:%S")
-
-    relative_units = [
-        (r"^(\d+)分钟前$", lambda n: now - timedelta(minutes=n)),
-        (r"^(\d+)小时前$", lambda n: now - timedelta(hours=n)),
-        (r"^(\d+)天前$", lambda n: now - timedelta(days=n)),
-        (r"^(\d+)周前$", lambda n: now - timedelta(weeks=n)),
-        (r"^(\d+)月前$", lambda n: _shift_months(now, -n)),
-        (r"^(\d+)年前$", lambda n: _shift_months(now, -12 * n)),
-    ]
-    for pattern, convert in relative_units:
-        m = re.fullmatch(pattern, text)
-        if m:
-            return convert(int(m.group(1))).strftime("%Y-%m-%d %H:%M:%S")
-
-    m = re.fullmatch(r"^(今天|昨天)(?:\s+(\d{1,2}:\d{2}))?$", text)
-    if m:
-        base = now.date() - timedelta(days=1 if m.group(1) == "昨天" else 0)
-        hh, mm = (m.group(2) or now.strftime("%H:%M")).split(":")
-        return datetime(base.year, base.month, base.day, int(hh), int(mm)).strftime("%Y-%m-%d %H:%M:%S")
-
-    m = re.fullmatch(r"^(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2}:\d{2}))?$", text)
-    if m:
-        hh, mm = (m.group(4) or "00:00").split(":")
-        return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), int(hh), int(mm)).strftime("%Y-%m-%d %H:%M:%S")
-
-    m = re.fullmatch(r"^(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2}:\d{2}))?$", text)
-    if m:
-        hh, mm = (m.group(3) or "00:00").split(":")
-        parsed = datetime(now.year, int(m.group(1)), int(m.group(2)), int(hh), int(mm))
-        if parsed > now:
-            parsed = parsed.replace(year=parsed.year - 1)
-        return parsed.strftime("%Y-%m-%d %H:%M:%S")
-
-    return ""
-
-
 def extract_video_comments(session: str, scrolls: int = 0, wait_seconds: float = 2.0, max_comments: int = 100) -> list[dict]:
     """Extract visible Douyin video comments with their visible comment time.
 
@@ -419,111 +294,9 @@ def extract_video_comments(session: str, scrolls: int = 0, wait_seconds: float =
     return normalized
 
 
-def is_comment_candidate(line: str) -> bool:
-    if line in COMMENT_NOISE or line == "...":
-        return False
-    if re.fullmatch(r"\d+", line) or re.fullmatch(r"\d{1,2}:\d{2}", line):
-        return False
-    if re.search(r"\d+天前|小时前|分钟前|·湖北|·武汉", line):
-        return False
-    if len(line) < 2 or len(line) > 100:
-        return False
-    return any(hint in line for hint in COMMENT_PLACE_HINTS) or "钓点" in line or "钓位" in line or "哪里" in line or "位置" in line
-
-
-def extract_comment_place_names(line: str, city: str) -> list[str]:
-    candidates: list[str] = []
-    for pattern in [
-        r"([\u4e00-\u9fa5]{1,12}(?:江滩|水库|水厂|泵站|公园|闸|桥|码头|江|河|湖|村|湾|港|沟|渠))",
-        r"([\u4e00-\u9fa5]{2,8}钓点)",
-        r"([\u4e00-\u9fa5]{2,8}钓位)",
-    ]:
-        for m in re.finditer(pattern, line):
-            name = m.group(1).strip(" ，,。.!！?？")
-            name = re.sub(r"^(湖北省|武汉市|武汉|湖北|去|到|在)", "", name)
-            had_generic_suffix = bool(re.search(r"(?:黄尾钓点|钓点|钓位)$", name))
-            name = re.sub(r"(黄尾钓点|钓点|钓位)$", "", name)
-            if had_generic_suffix and not any(hint in name for hint in COMMENT_PLACE_HINTS):
-                continue
-            if name and len(name) >= 2 and name not in candidates and name not in {city, "同款", "哪里"}:
-                candidates.append(name)
-    return _dedupe_places(candidates)
-
-
-def extract_comment_spot_clues_from_comments(comments: list[dict], city: str) -> list[dict]:
-    """Rule-based comment place clues from already extracted comments.
-
-    This pure helper is intentionally side-effect free so it can be exercised
-    with saved comment JSON fixtures without opening a browser.
-    """
-    clues: list[dict] = []
-    for index, comment in enumerate(comments, start=1):
-        line = str(comment.get("text", "")).strip()
-        if not is_comment_candidate(line):
-            continue
-        places = extract_comment_place_names(line, city)
-        if places:
-            clues.append({
-                "comment_index": index,
-                "comment_id": comment.get("comment_id"),
-                "text": line,
-                "author": comment.get("author", ""),
-                "comment_time": comment.get("comment_time", ""),
-                "comment_time_raw": comment.get("comment_time_raw", ""),
-                "comment_time_standard": comment.get("comment_time_standard", ""),
-                "ip_location": comment.get("ip_location", ""),
-                "place_candidates": places,
-            })
-    return clues
-
-
 def extract_comment_spot_clues(session: str, city: str, scrolls: int = 0, wait_seconds: float = 2.0) -> list[dict]:
     comments = extract_video_comments(session, scrolls=scrolls, wait_seconds=wait_seconds, max_comments=200)
     return extract_comment_spot_clues_from_comments(comments, city)
-
-
-def clean_text_for_llm(text: str, max_lines: int = 120) -> str:
-    """Strip Douyin page chrome/markdown noise before sending text to the LLM."""
-    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
-    text = re.sub(r"\[([^\]]{0,80})\]\([^)]*\)", r"\1", text)
-    text = re.sub(r"https?://\S+|//www\.douyin\.com/\S+|data:image/\S+", "", text)
-    lines: list[str] = []
-    seen: set[str] = set()
-    for raw_line in re.split(r"\n+", text):
-        line = raw_line.strip(" \t-[]()（）")
-        line = re.sub(r"\s+", " ", line).strip()
-        line_plain = re.sub(r"^#+\s*", "", line).strip()
-        if line_plain == "推荐视频" or line_plain.startswith("合集"):
-            break
-        if not line or line in seen:
-            continue
-        seen.add(line)
-        if line_plain in LLM_TEXT_NOISE:
-            continue
-        if re.fullmatch(r"\d+", line) or re.fullmatch(r"\d{1,2}:\d{2}(?:\s*/\s*\d{1,2}:\d{2})?(?:\s*直播)?", line):
-            continue
-        if re.fullmatch(r"\d+(?:\.\d+)?x", line):
-            continue
-        if len(line) > 220 and not any(hint in line for hint in LLM_TEXT_KEEP_HINTS):
-            continue
-        if not any(hint in line for hint in LLM_TEXT_KEEP_HINTS) and len(line) <= 12:
-            continue
-        lines.append(line)
-        if len(lines) >= max_lines:
-            break
-    return "\n".join(lines)
-
-
-def _dedupe_places(places: list[str]) -> list[str]:
-    cleaned: list[str] = []
-    for place in places:
-        place = re.sub(r"^(湖北省|武汉市|武汉|湖北)", "", str(place).strip(" ，,。:：；;、\"'[]{}()（）"))
-        if len(place) < 2 or place in {"钓鱼", "野钓", "武汉", "湖北", "附近", "这里", "那里"}:
-            continue
-        if place not in cleaned:
-            cleaned.append(place)
-    # Prefer more specific names: remove shorter names contained in a longer candidate.
-    return [p for p in cleaned if not any(p != q and p in q for q in cleaned)]
 
 
 def log_llm_debug(message: str, enabled: bool = True) -> None:
@@ -607,23 +380,6 @@ def extract_places_with_llm(text: str, city: str, llm_url: str = DEFAULT_LLM_URL
     return places
 
 
-def format_comments_for_llm(comments: list[dict], max_chars: int = 8000, start_index: int = 1) -> str:
-    lines: list[str] = []
-    total = 0
-    for index, comment in enumerate(comments, start=start_index):
-        text = re.sub(r"\s+", " ", str(comment.get("text", "")).strip())
-        if not text:
-            continue
-        author = str(comment.get("author", "")).strip() or "匿名"
-        comment_time = comment.get("comment_time_standard") or comment.get("comment_time_raw") or comment.get("comment_time") or ""
-        line = f"[{index}] {author} {comment_time}: {text}"
-        if total + len(line) > max_chars:
-            break
-        lines.append(line)
-        total += len(line)
-    return "\n".join(lines)
-
-
 def extract_comment_places_with_llm(comments: list[dict], city: str, llm_url: str = DEFAULT_LLM_URL, debug: bool = True) -> list[dict]:
     if not comments:
         return []
@@ -683,22 +439,6 @@ def extract_comment_places_with_llm(comments: list[dict], city: str, llm_url: st
         })
     log_llm_debug(f"comment-place clues={clues}", debug)
     return clues
-
-
-def _normalize_comment_keyword_category(value: object) -> str:
-    category = str(value or "").strip().lower()
-    if category in COMMENT_KEYWORD_CATEGORIES:
-        return category
-    return COMMENT_KEYWORD_CATEGORY_ALIASES.get(str(value or "").strip(), "")
-
-
-def _normalize_comment_keyword(value: object) -> str:
-    keyword = re.sub(r"\s+", "", str(value or "").strip(" ，,。:：；;、\"'[]{}()（）"))
-    if not keyword or len(keyword) > 16:
-        return ""
-    if keyword in {"钓点", "位置", "这里", "那里", "哪里", "评论", "视频", "作者"}:
-        return ""
-    return keyword
 
 
 def extract_comment_keywords_with_llm(
@@ -784,30 +524,6 @@ def extract_comment_keywords_with_llm(
     return keywords
 
 
-def aggregate_comment_keywords(keywords: list[dict]) -> list[dict]:
-    grouped: dict[tuple[str, str], dict] = {}
-    for item in keywords:
-        keyword = str(item.get("keyword", "")).strip()
-        category = str(item.get("category", "")).strip()
-        if not keyword or not category:
-            continue
-        key = (keyword, category)
-        bucket = grouped.setdefault(key, {"keyword": keyword, "category": category, "count": 0, "confidence_total": 0.0, "comment_ids": []})
-        bucket["count"] += 1
-        bucket["confidence_total"] += float(item.get("confidence", 0.0) or 0.0)
-        comment_id = item.get("comment_id")
-        if comment_id and comment_id not in bucket["comment_ids"]:
-            bucket["comment_ids"].append(comment_id)
-    result = []
-    for bucket in grouped.values():
-        count = bucket.pop("count")
-        confidence_total = bucket.pop("confidence_total")
-        bucket["count"] = count
-        bucket["avg_confidence"] = round(confidence_total / count, 4) if count else 0.0
-        result.append(bucket)
-    return sorted(result, key=lambda x: (-x["count"], x["category"], x["keyword"]))
-
-
 def score_comment_quality_groups_with_llm(
     comments: list[dict],
     group_size: int = 5,
@@ -855,75 +571,6 @@ def score_comment_quality_groups_with_llm(
         })
     log_llm_debug(f"comment-quality scores={scores}", debug)
     return scores
-
-
-def normalize_quality_score(score_1_5: float) -> float:
-    """Normalize a 1-5 fishing-spot quality score to 0-1."""
-    return max(0.0, min((float(score_1_5) - 1.0) / 4.0, 1.0))
-
-
-def aggregate_quality_scores(scores: list[dict], comment_ids: list[int] | None = None) -> dict:
-    """Weighted average of normalized comment quality scores.
-
-    If comment_ids are provided, only groups containing those comments are used.
-    Confidence is used as the weight and the result is already normalized to 0-1.
-    """
-    selected: list[dict] = []
-    wanted = {int(x) for x in (comment_ids or []) if x}
-    for item in scores:
-        ids = {int(x) for x in item.get("comment_ids", []) if x}
-        if wanted and not (wanted & ids):
-            continue
-        selected.append(item)
-    if not selected:
-        return {"quality_score": None, "confidence": 0.0, "detail": ""}
-    weighted_total = 0.0
-    weight_total = 0.0
-    details: list[str] = []
-    for item in selected:
-        confidence = max(float(item.get("confidence", 0.0)), 0.05)
-        normalized = float(item.get("normalized_score", normalize_quality_score(item.get("score_1_5", item.get("score", 3)))))
-        weighted_total += normalized * confidence
-        weight_total += confidence
-        details.append(
-            f"第{item.get('group_index')}组: raw={item.get('score_1_5', item.get('score'))}, norm={normalized:.2f}, conf={item.get('confidence')}, {item.get('summary', '')}"
-        )
-    return {
-        "quality_score": round(weighted_total / weight_total, 4) if weight_total else None,
-        "confidence": round(min(weight_total / len(selected), 1.0), 4) if selected else 0.0,
-        "detail": "；".join(details),
-    }
-
-
-def normalize_fish_species(values: list[str]) -> list[str]:
-    species: list[str] = []
-    for value in values:
-        name = str(value).strip(" ，,。:：；;、\"'[]{}()（）")
-        if not name:
-            continue
-        matched = ""
-        for canonical, aliases in FISH_PATTERNS.items():
-            if name == canonical or name in aliases:
-                matched = canonical
-                break
-        if not matched:
-            for canonical, aliases in FISH_PATTERNS.items():
-                if any(len(alias) >= 2 and alias in name for alias in aliases):
-                    matched = canonical
-                    break
-        if matched and matched not in species:
-            species.append(matched)
-        elif not matched and len(name) <= 6 and name not in species:
-            species.append(name)
-    return species
-
-
-def extract_fish_species(text: str) -> list[str]:
-    found: list[str] = []
-    for canonical, aliases in FISH_PATTERNS.items():
-        if canonical in text or any(alias in text for alias in aliases):
-            found.append(canonical)
-    return normalize_fish_species(found)
 
 
 def extract_fish_species_with_llm(text: str, llm_url: str = DEFAULT_LLM_URL, debug: bool = True) -> list[str]:

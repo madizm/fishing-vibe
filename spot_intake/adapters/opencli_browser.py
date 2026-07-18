@@ -8,6 +8,8 @@ closed on exit. Session names never cross the interface.
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -95,6 +97,9 @@ _COMMENTS_JS = r"""(() => {
   }
   return records;
 })()"""
+
+
+_MEDIA_URL_JS = "(() => document.querySelector('video source')?.src || document.querySelector('video')?.currentSrc || document.querySelector('video')?.src || '')()"
 
 
 def _one_line(js: str) -> str:
@@ -188,6 +193,99 @@ class OpencliBrowser:
                 "is_author": bool(item.get("is_author", False)),
             })
         return normalized
+
+    def download_audio(self, url: str, out_dir: str) -> dict:
+        """Extract the current playable media URL from the video page, download
+        the MP4, and keep only the losslessly-demuxed .m4a. Signed play URLs
+        expire quickly, so the page is (re)opened on every call."""
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        m = re.search(r"/video/(\d+)", url)
+        vid = m.group(1) if m else "douyin-video"
+
+        self.open(url)
+        run(["opencli", "browser", self.session, "wait", "time", "5"], timeout=60, cwd=self.cwd)
+        raw = run(["opencli", "browser", self.session, "eval", _MEDIA_URL_JS], timeout=90, cwd=self.cwd).strip()
+        media_url = ""
+        if raw:
+            first = raw.splitlines()[0].strip()
+            try:
+                parsed = json.loads(first)
+                media_url = parsed if isinstance(parsed, str) else ""
+            except Exception:
+                media_url = first
+        candidates = [] if not media_url or media_url.startswith("blob:") else [media_url]
+        if not candidates:
+            # MSE playback: the <video> src is a blob handle, not fetchable.
+            # Capture the player's own media requests off the network instead.
+            candidates = self._capture_media_urls(url)
+        if not candidates:
+            raise RuntimeError(f"could not extract a playable media URL from {url}")
+
+        m4a = out / f"{vid}.m4a"
+        source = self._download_with_audio(candidates, url, out, vid)
+        try:
+            run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(source), "-vn", "-c:a", "copy", str(m4a)], timeout=300, cwd=self.cwd)
+        finally:
+            source.unlink(missing_ok=True)  # only the audio track is kept (ADR 0001)
+        return {"audio_path": str(m4a), "video_id": vid}
+
+    def _download_with_audio(self, candidates: list[str], referer: str, out: Path, vid: str) -> Path:
+        """Download candidates until one actually contains an audio stream.
+
+        Douyin MSE playback uses split streams: one URL is video-only, another
+        audio-only (the ideal transcription source). Content-Type cannot tell
+        them apart (both video/mp4), so we ffprobe.
+        """
+        for index, media_url in enumerate(candidates[:4]):
+            tmp = out / f"{vid}.candidate{index}"
+            probe = ""
+            try:
+                run(["curl", "-L", "--fail", "--retry", "2", "-A", "Mozilla/5.0", "-e", referer, media_url, "-o", str(tmp)], timeout=600, cwd=self.cwd)
+                probe = run(
+                    ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_name", "-of", "csv=p=0", str(tmp)],
+                    timeout=60,
+                    cwd=self.cwd,
+                )
+                if probe.strip():
+                    return tmp
+            finally:
+                if tmp.exists() and not probe.strip():
+                    tmp.unlink()
+        raise RuntimeError(f"no candidate media URL had an audio stream ({len(candidates)} tried)")
+
+    def _capture_media_urls(self, url: str, wait_seconds: float = 10.0) -> list[str]:
+        """Reload the page under `browser network --follow --all` and return the
+        deduped media response URLs the player fetches (signed, curl-able)."""
+        proc = subprocess.Popen(
+            ["opencli", "browser", self.session, "network", "--follow", "--all", "--since", "120s"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            cwd=self.cwd,
+        )
+        try:
+            time.sleep(1)  # let the follower attach before the reload
+            self.open(url)
+            time.sleep(wait_seconds)
+        finally:
+            proc.terminate()
+            try:
+                out, _ = proc.communicate(timeout=10)
+            except Exception:
+                proc.kill()
+                out, _ = proc.communicate()
+        urls: list[str] = []
+        for line in out.splitlines():
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            media_url = str(entry.get("url", ""))
+            ct = str(entry.get("ct", ""))
+            if (ct.startswith("video/") or "douyinvod" in media_url) and media_url not in urls:
+                urls.append(media_url)
+        return urls
 
 
 class OpencliDouyinSearch:

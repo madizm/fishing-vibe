@@ -70,6 +70,21 @@ def init_db(conn: sqlite3.Connection) -> None:
       FOREIGN KEY(video_id) REFERENCES videos(id) ON DELETE CASCADE,
       FOREIGN KEY(comment_id) REFERENCES video_comments(id) ON DELETE CASCADE
     )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS video_transcripts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      video_id INTEGER NOT NULL UNIQUE,
+      status TEXT NOT NULL,
+      transcript_text TEXT,
+      audio_path TEXT,
+      srt_path TEXT,
+      model TEXT,
+      error TEXT,
+      raw_response_path TEXT,
+      summary TEXT,
+      extras_json TEXT,
+      transcribed_at TEXT,
+      FOREIGN KEY(video_id) REFERENCES videos(id) ON DELETE CASCADE
+    )""")
     # No separate comment_quality_scores table: normalized comment quality is
     # written directly onto fishing_spots. Drop the legacy derived table if it exists.
     conn.execute("DROP TABLE IF EXISTS comment_quality_scores")
@@ -207,6 +222,65 @@ class SqliteSpotStore:
                WHERE video_id=?""",
             (quality_score, "comment_llm", quality.get("detail", ""), video_id),
         )
+
+    def upsert_transcript(self, video_id: int, transcript: dict) -> None:
+        """One transcript per video: re-transcribing replaces the row."""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.conn.execute(
+            """INSERT INTO video_transcripts(video_id, status, transcript_text, audio_path, srt_path, model, error, raw_response_path, summary, extras_json, transcribed_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(video_id) DO UPDATE SET
+                 status=excluded.status,
+                 transcript_text=excluded.transcript_text,
+                 audio_path=excluded.audio_path,
+                 srt_path=excluded.srt_path,
+                 model=excluded.model,
+                 error=excluded.error,
+                 raw_response_path=excluded.raw_response_path,
+                 summary=excluded.summary,
+                 extras_json=excluded.extras_json,
+                 transcribed_at=excluded.transcribed_at""",
+            (
+                video_id,
+                transcript.get("status", "error"),
+                transcript.get("transcript_text", ""),
+                transcript.get("audio_path", ""),
+                transcript.get("srt_path", ""),
+                transcript.get("model", ""),
+                transcript.get("error", ""),
+                transcript.get("raw_response_path", ""),
+                transcript.get("summary", ""),
+                transcript.get("extras_json", ""),
+                now,
+            ),
+        )
+
+    def transcript_for_video(self, video_id: int) -> dict | None:
+        row = self.conn.execute(
+            """SELECT video_id, status, transcript_text, audio_path, srt_path, model, error, raw_response_path, summary, extras_json, transcribed_at
+               FROM video_transcripts WHERE video_id=?""",
+            (video_id,),
+        ).fetchone()
+        if not row:
+            return None
+        keys = ["video_id", "status", "transcript_text", "audio_path", "srt_path", "model", "error", "raw_response_path", "summary", "extras_json", "transcribed_at"]
+        return dict(zip(keys, row))
+
+    def videos_pending_transcription(self, limit: int = 0) -> list[dict]:
+        """Backfill targets: videos with no transcript row or status='error'.
+        'ok'/'no_speech' are never retried (no_speech is a terminal state)."""
+        sql = """SELECT v.id, v.url, v.keyword, v.title
+                 FROM videos v LEFT JOIN video_transcripts t ON t.video_id = v.id
+                 WHERE t.id IS NULL OR t.status = 'error'
+                 ORDER BY v.id"""
+        params: tuple = ()
+        if limit > 0:
+            sql += " LIMIT ?"
+            params = (limit,)
+        return [
+            {"id": int(r[0]), "url": r[1] or "", "keyword": r[2] or "", "title": r[3] or ""}
+            for r in self.conn.execute(sql, params)
+        ]
 
     def insert_record(self, keyword: str, video: dict, spot: dict) -> None:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

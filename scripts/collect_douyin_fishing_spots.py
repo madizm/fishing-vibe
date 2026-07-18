@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))  # allow running the script directly without installing the package
 
 from spot_intake import Config, Intake, IntakeOptions
-from spot_intake.adapters import GeocodeSkill, NullLlm, OpenaiLlm, OpencliBrowser, OpencliDouyinSearch, SqliteSpotStore
+from spot_intake.adapters import GeocodeSkill, MimoTranscriber, NullLlm, OpenaiLlm, OpencliBrowser, OpencliDouyinSearch, SqliteSpotStore
 from spot_intake.fixtures import load_comments_fixture, load_extracted_fixture, load_search_item_fixture
 
 
@@ -43,6 +43,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--max-video-places", type=int, default=3, help="Maximum video-text place candidates to geocode/save per video; 0 means all")
     ap.add_argument("--include-comments", dest="include_comments", action="store_true", default=True, help="Extract/save visible comments, run LLM comment spot extraction, and score comment quality (default)")
     ap.add_argument("--no-include-comments", dest="include_comments", action="store_false", help="Skip comment extraction and analysis")
+    ap.add_argument("--include-transcript", dest="include_transcript", action="store_true", default=True, help="Download the audio track, transcribe it (Mimo ASR), and merge transcript-derived spots/fish/summary (default)")
+    ap.add_argument("--no-include-transcript", dest="include_transcript", action="store_false", help="Skip audio download and transcription")
     ap.add_argument("--comment-scrolls", type=int, default=0, help="How many times to scroll before reading comments")
     ap.add_argument("--comment-wait", type=float, default=2.0, help="Seconds to wait after each comment scroll")
     ap.add_argument("--comment-max", type=int, default=100, help="Maximum visible comments to extract/save per video")
@@ -67,6 +69,8 @@ def build_intake(args: argparse.Namespace, config: Config, *, with_store: bool) 
         keyword=args.keyword,
         max_video_places=args.max_video_places,
         include_comments=args.include_comments,
+        include_transcript=args.include_transcript,
+        downloads_dir=str(config.downloads_dir),
         comment_scrolls=args.comment_scrolls,
         comment_wait=args.comment_wait,
         comment_max=args.comment_max,
@@ -77,12 +81,18 @@ def build_intake(args: argparse.Namespace, config: Config, *, with_store: bool) 
     )
     llm = NullLlm() if args.no_llm else OpenaiLlm(args.llm_url or config.llm_url, debug=not args.quiet_llm)
     store = SqliteSpotStore(config.db_path) if with_store else _UnneededStore()
+    transcriber = None
+    if args.include_transcript and config.mimo_api_key:
+        transcriber = MimoTranscriber(api_key=config.mimo_api_key, model=config.asr_model)
+    elif args.include_transcript:
+        print("[warn] MIMO_API_KEY is not set; transcription is disabled for this run", file=sys.stderr, flush=True)
     return Intake(
         browser=OpencliBrowser(args.session, cwd=config.root),
         llm=llm,
         geocoder=GeocodeSkill(config.geocode_script, cwd=config.root),
         store=store,
         searcher=OpencliDouyinSearch(cwd=config.root),
+        transcriber=transcriber,
         options=options,
     )
 
@@ -141,7 +151,8 @@ def main() -> None:
     reports = [intake.collect_video(direct_url)] if direct_url else intake.collect_keyword(args.keyword, args.limit)
     results = [spot for report in reports for spot in report.spots]
     comment_results = [report.comment_result for report in reports if report.comment_result]
-    print(json.dumps({"inserted_spots": len(results), "results": results, "comment_results": comment_results, "db": str(config.db_path)}, ensure_ascii=False, indent=2))
+    transcript_statuses = {report.video["url"]: report.transcript_status for report in reports if report.transcript_status}
+    print(json.dumps({"inserted_spots": len(results), "results": results, "comment_results": comment_results, "transcript_statuses": transcript_statuses, "db": str(config.db_path)}, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

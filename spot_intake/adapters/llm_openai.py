@@ -38,12 +38,13 @@ class OpenaiLlm:
 
     # -- raw call --------------------------------------------------------------
 
-    def _chat_json_array(
+    def _chat_content(
         self,
         prompt: str,
         log_prefix: str = "llm",
         system_prompt: str = "你是信息抽取器，只输出合法 JSON，不要解释。",
-    ) -> list[object]:
+    ) -> str:
+        """One chat completion call; returns the raw message content or "" on failure."""
         payload = {
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -73,27 +74,60 @@ class OpenaiLlm:
                 f"{log_prefix} model={data.get('model', '')} finish_reason={choice.get('finish_reason', '')} output_chars={len(content)}",
                 debug,
             )
+            return content
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")[:500]
             log_llm_debug(f"{log_prefix} http_error status={exc.code} detail={detail!r}", debug)
-            return []
+            return ""
         except (urllib.error.URLError, TimeoutError, KeyError, IndexError, json.JSONDecodeError) as exc:
             log_llm_debug(f"{log_prefix} error type={type(exc).__name__} detail={exc}", debug)
-            return []
+            return ""
 
+    def _chat_json_array(
+        self,
+        prompt: str,
+        log_prefix: str = "llm",
+        system_prompt: str = "你是信息抽取器，只输出合法 JSON，不要解释。",
+    ) -> list[object]:
+        content = self._chat_content(prompt, log_prefix, system_prompt)
+        if not content:
+            return []
         # Some models may wrap JSON in markdown or add prose; salvage the first JSON array.
         match = re.search(r"\[[\s\S]*\]", content)
         if not match:
-            log_llm_debug(f"{log_prefix} no_json_array content_preview={content[:200]!r}", debug)
+            log_llm_debug(f"{log_prefix} no_json_array content_preview={content[:200]!r}", self.debug)
             return []
         try:
             parsed = json.loads(match.group(0))
         except json.JSONDecodeError as exc:
-            log_llm_debug(f"{log_prefix} json_parse_error detail={exc} content_preview={content[:200]!r}", debug)
+            log_llm_debug(f"{log_prefix} json_parse_error detail={exc} content_preview={content[:200]!r}", self.debug)
             return []
         if not isinstance(parsed, list):
-            log_llm_debug(f"{log_prefix} unexpected_json_type type={type(parsed).__name__}", debug)
+            log_llm_debug(f"{log_prefix} unexpected_json_type type={type(parsed).__name__}", self.debug)
             return []
+        return parsed
+
+    def _chat_json_object(
+        self,
+        prompt: str,
+        log_prefix: str = "llm",
+        system_prompt: str = "你是信息抽取器，只输出合法 JSON，不要解释。",
+    ) -> dict:
+        content = self._chat_content(prompt, log_prefix, system_prompt)
+        if not content:
+            return {}
+        match = re.search(r"\{[\s\S]*\}", content)
+        if not match:
+            log_llm_debug(f"{log_prefix} no_json_object content_preview={content[:200]!r}", self.debug)
+            return {}
+        try:
+            parsed = json.loads(match.group(0))
+        except json.JSONDecodeError as exc:
+            log_llm_debug(f"{log_prefix} json_parse_error detail={exc} content_preview={content[:200]!r}", self.debug)
+            return {}
+        if not isinstance(parsed, dict):
+            log_llm_debug(f"{log_prefix} unexpected_json_type type={type(parsed).__name__}", self.debug)
+            return {}
         return parsed
 
     # -- Llm protocol ------------------------------------------------------------
@@ -138,6 +172,45 @@ class OpenaiLlm:
         species = normalize_fish_species(raw)
         log_llm_debug(f"fish species={species}", self.debug)
         return species
+
+    def extract_transcript_places(self, transcript: str, city: str) -> list[str]:
+        prompt = f"""从下面抖音钓鱼视频的语音转写文本（ASR 结果）中提取实际地名/钓点候选。
+要求：
+- 只返回 JSON 数组，例如 [\"野芷湖公园\",\"东荆河\"]
+- 优先提取河流、湖泊、水库、公园、村/桥/闸/江滩等可地理编码的地点
+- 不要返回泛词（钓点、野钓、附近）、人名、鱼种、装备、城市名本身
+- ASR 可能有谐音错字：若某地名疑似 {city} 某水系/地名的谐音，结合钓鱼语境纠正后再输出（如“富河”→“府河”）；不确定时保留原文
+- 若无明确地点返回 []
+- 城市上下文：{city}
+
+转写文本：
+{transcript[:6000]}"""
+        parsed = self._chat_json_array(prompt, "transcript-place", "你是地名抽取器，只输出合法 JSON，不要解释。")
+        places = dedupe_places([p for p in parsed if isinstance(p, str)])
+        log_llm_debug(f"transcript-place places={places}", self.debug)
+        return places
+
+    def extract_transcript_fish_species(self, transcript: str) -> list[str]:
+        # Fish names normalize against the vocabulary lexicon either way, so the
+        # page-text prompt doubles as the transcript prompt.
+        return self.extract_fish_species(transcript)
+
+    def summarize_transcript(self, transcript: str) -> dict:
+        prompt = f"""下面是抖音钓鱼视频的语音转写文本（ASR 结果，可能含错字）。请输出一个 JSON 对象：
+{{"summary": "80字以内的中文摘要，面向钓友，说明地点/鱼种/钓法/渔获", "extras": {{"钓法/饵料": "…", "渔获": "…", "出钓时间": "…", "其他": "…"}}}}
+要求：
+- 只输出合法 JSON，不要解释
+- extras 只收录文本明确提到的信息，没有的键直接省略，不要编造
+- 文本没有实质内容时返回 {{"summary": "", "extras": {{}}}}
+
+转写文本：
+{transcript[:6000]}"""
+        parsed = self._chat_json_object(prompt, "transcript-summary", "你是钓鱼视频摘要器，只输出合法 JSON，不要解释。")
+        summary = str(parsed.get("summary", "") or "")
+        extras = parsed.get("extras")
+        result = {"summary": summary, "extras": extras if isinstance(extras, dict) else {}}
+        log_llm_debug(f"transcript-summary chars={len(summary)} extras_keys={list(result['extras'])}", self.debug)
+        return result
 
     def extract_comment_places(self, comments: list[dict], city: str) -> list[dict]:
         if not comments:
@@ -335,3 +408,12 @@ class NullLlm:
 
     def score_comment_quality(self, comments: list[dict], group_size: int = 5) -> list[dict]:
         return []
+
+    def extract_transcript_places(self, transcript: str, city: str) -> list[str]:
+        return []
+
+    def extract_transcript_fish_species(self, transcript: str) -> list[str]:
+        return []
+
+    def summarize_transcript(self, transcript: str) -> dict:
+        return {"summary": "", "extras": {}}

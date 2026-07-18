@@ -24,7 +24,7 @@ from spot_intake.extract import (
     extract_fish_species,
     normalize_fish_species,
 )
-from spot_intake.ports import Browser, Geocoder, Llm, Searcher, SpotStore
+from spot_intake.ports import Browser, Geocoder, Llm, Searcher, SpotStore, Transcriber
 from spot_intake.vocabulary import PLACE_PATTERNS
 
 
@@ -34,6 +34,8 @@ class IntakeOptions:
     keyword: str = "武汉钓鱼"
     max_video_places: int = 3  # 0 means all
     include_comments: bool = True
+    include_transcript: bool = True
+    downloads_dir: str = "downloads"
     comment_scrolls: int = 0
     comment_wait: float = 2.0
     comment_max: int = 100
@@ -68,6 +70,7 @@ class IntakeReport:
     quality_applied: bool = False
     spots: list[dict] = field(default_factory=list)  # full spot records, for CLI output
     comment_result: dict | None = None  # analysis summary, for CLI output
+    transcript_status: str | None = None  # "ok" | "no_speech" | "error" | None (not attempted)
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +177,7 @@ class Intake:
         geocoder: Geocoder,
         store: SpotStore,
         searcher: Searcher | None = None,
+        transcriber: Transcriber | None = None,
         options: IntakeOptions | None = None,
     ) -> None:
         self.browser = browser
@@ -181,6 +185,7 @@ class Intake:
         self.geocoder = geocoder
         self.store = store
         self.searcher = searcher
+        self.transcriber = transcriber
         self.options = options or IntakeOptions()
         self.options.validate()
 
@@ -227,12 +232,46 @@ class Intake:
                 inserted_places.add(place)
                 report.spots.append({"video": video["url"], "title": video["title"], "fish_species": video.get("fish_species", []), **spot})
 
+        pending_comment_spots = None
         if opts.include_comments:
-            self._collect_comments(report, video_id, inserted_places, keyword)
+            pending_comment_spots = self._collect_comments(report, video_id, keyword)
+
+        # Transcript stage: after video_text, before comment spots, so the
+        # first-come-first-served dedupe order is video_text → transcript →
+        # comments (ADR 0001). Skipped for already-collected videos — the
+        # backfill path (collect_transcript) owns those.
+        if opts.include_transcript and not already_exists:
+            if self.transcriber is None:
+                print(f"[warn] include_transcript is on but no Transcriber is wired; skipping transcription for {url}", file=sys.stderr, flush=True)
+            else:
+                report.transcript_status = self._transcribe_and_merge(video, video_id, inserted_places, keyword, report.spots)
+
+        if pending_comment_spots:
+            self._insert_comment_spots(report, video_id, inserted_places, keyword, pending_comment_spots)
 
         report.spots_written = len(report.spots)
         report.spot_names = [s["place_name"] for s in report.spots]
         return report
+
+    def collect_transcript(self, video_id: int, url: str, keyword: str | None = None) -> dict:
+        """Backfill path: transcribe one already-collected video and merge
+        transcript findings (spots/fish) into its records."""
+        if self.transcriber is None:
+            raise RuntimeError("collect_transcript requires a Transcriber at the transcription seam")
+        opts = self.options
+        video = {
+            "url": url,
+            "title": "",
+            "raw_text": "",
+            "fish_species": [],
+            "fish_species_source": "",
+            "fish_confidence": 0.0,
+            **self.store.video_metadata(video_id),
+        }
+        inserted_places = self.store.existing_spot_names(video_id)
+        spots: list[dict] = []
+        status = self._transcribe_and_merge(video, video_id, inserted_places, keyword or opts.keyword, spots)
+        return {"video_id": video_id, "url": url, "status": status, "spots_added": spots}
 
     def collect_keyword(self, keyword: str, limit: int) -> list[IntakeReport]:
         if self.searcher is None:
@@ -290,7 +329,86 @@ class Intake:
 
     # -- internals --------------------------------------------------------------
 
-    def _collect_comments(self, report: IntakeReport, video_id: int, inserted_places: set[str], keyword: str) -> None:
+    def _transcribe_and_merge(self, video: dict, video_id: int, inserted_places: set[str], keyword: str, spots_out: list[dict]) -> str:
+        """Download → transcribe → LLM extract → merge spots/fish. Returns the
+        transcript status. Non-fatal by design (ADR 0001): any acquisition/ASR
+        failure lands in video_transcripts.status='error' and the rest of the
+        pipeline proceeds on the remaining text sources."""
+        opts = self.options
+        url = video["url"]
+        try:
+            media = self.browser.download_audio(url, opts.downloads_dir)
+            result = self.transcriber.transcribe(media["audio_path"])
+        except Exception as exc:
+            print(f"[warn] transcription failed for {url}: {exc}", file=sys.stderr, flush=True)
+            self.store.upsert_transcript(video_id, {
+                "status": "error", "error": str(exc)[:500], "transcript_text": "",
+                "audio_path": "", "srt_path": "", "model": "",
+                "raw_response_path": "", "summary": "", "extras_json": "",
+            })
+            return "error"
+
+        text = str(result.get("text", "") or "").strip()
+        row = {
+            "status": result.get("status", "ok"),
+            "transcript_text": text,
+            "audio_path": str(media.get("audio_path", "")),
+            "srt_path": str(result.get("srt_path") or ""),
+            "model": str(result.get("model") or ""),
+            "error": "",
+            "raw_response_path": str(result.get("raw_response_path") or ""),
+            "summary": "",
+            "extras_json": "",
+        }
+        if row["status"] == "no_speech" or not text:
+            row["status"] = "no_speech"
+            self.store.upsert_transcript(video_id, row)
+            return "no_speech"
+
+        try:
+            places = dedupe_places(self.llm.extract_transcript_places(text, opts.city))
+            fish = normalize_fish_species(self.llm.extract_transcript_fish_species(text))
+            insights = self.llm.summarize_transcript(text) or {}
+        except Exception as exc:
+            # The transcript text itself is safely stored below; extraction can
+            # be retried later without re-downloading or re-transcribing.
+            print(f"[warn] transcript LLM analysis failed for {url}: {exc}", file=sys.stderr, flush=True)
+            places, fish, insights = [], [], {}
+        row["summary"] = str(insights.get("summary", "") or "")
+        extras = insights.get("extras")
+        row["extras_json"] = json.dumps(extras, ensure_ascii=False) if extras else ""
+        self.store.upsert_transcript(video_id, row)
+
+        if fish:
+            video["fish_species"] = normalize_fish_species([*video.get("fish_species", []), *fish])
+            source = video.get("fish_species_source", "")
+            video["fish_species_source"] = f"{source}+llm:transcript" if source else "llm:transcript"
+            video["fish_confidence"] = max(float(video.get("fish_confidence", 0.0) or 0.0), 0.95)
+
+        # max_video_places applies per source: transcript candidates get their
+        # own budget, independent of the video_text candidates (ADR 0001).
+        candidates = places if opts.max_video_places == 0 else places[: opts.max_video_places]
+        for place in candidates:
+            if place in inserted_places:
+                continue
+            geo = self.geocoder.geocode(place, opts.city)
+            if not geo:
+                continue
+            spot = {
+                "place_name": place,
+                "confidence": 0.9 if geo["geocode_score"] >= 90 else 0.7,
+                "source_type": "transcript",
+                "source_text": text[:500],
+                **geo,
+            }
+            self.store.insert_record(keyword, video, spot)
+            inserted_places.add(place)
+            spots_out.append({"video": url, "title": video.get("title", ""), "fish_species": video.get("fish_species", []), **spot})
+        return "ok"
+
+    def _collect_comments(self, report: IntakeReport, video_id: int, keyword: str) -> dict | None:
+        """Read/analyze/store comments. Spot insertion is deferred (returned as
+        pending inputs) so transcript spots can claim shared place names first."""
         opts = self.options
         video = report.video
         url = video["url"]
@@ -326,7 +444,29 @@ class Intake:
             quality_groups = []
             video_quality = {"quality_score": None, "confidence": 0.0, "detail": ""}
 
-        for clue in comment_clues:
+        report.comments_stored = len(comments)
+        report.keywords_stored = len(comment_keywords)
+        report.quality_applied = video_quality.get("quality_score") is not None
+        report.comment_result = {
+            "video": video["url"],
+            "title": video["title"],
+            "saved_comments": len(comments),
+            "rule_comment_place_clues": rule_comment_clues,
+            "comment_place_clues": comment_clues,
+            "comment_keywords": comment_keywords,
+            "comment_keyword_summary": comment_keyword_summary,
+            "spot_quality_score": video_quality.get("quality_score"),
+            "spot_quality_detail": video_quality.get("detail", ""),
+            "comment_quality_groups": quality_groups,
+        }
+        return {"comment_clues": comment_clues, "quality_groups": quality_groups, "video_quality": video_quality}
+
+    def _insert_comment_spots(self, report: IntakeReport, video_id: int, inserted_places: set[str], keyword: str, pending: dict) -> None:
+        opts = self.options
+        video = report.video
+        quality_groups = pending["quality_groups"]
+        video_quality = pending["video_quality"]
+        for clue in pending["comment_clues"]:
             place = clue.get("place_name", "")
             if not place or place in inserted_places:
                 continue
@@ -352,22 +492,6 @@ class Intake:
             self.store.insert_record(keyword, video, spot)
             inserted_places.add(place)
             report.spots.append({"video": video["url"], "title": video["title"], "fish_species": video.get("fish_species", []), **spot})
-
-        report.comments_stored = len(comments)
-        report.keywords_stored = len(comment_keywords)
-        report.quality_applied = video_quality.get("quality_score") is not None
-        report.comment_result = {
-            "video": video["url"],
-            "title": video["title"],
-            "saved_comments": len(comments),
-            "rule_comment_place_clues": rule_comment_clues,
-            "comment_place_clues": comment_clues,
-            "comment_keywords": comment_keywords,
-            "comment_keyword_summary": comment_keyword_summary,
-            "spot_quality_score": video_quality.get("quality_score"),
-            "spot_quality_detail": video_quality.get("detail", ""),
-            "comment_quality_groups": quality_groups,
-        }
 
     def _throttle(self, index: int, total: int) -> None:
         if index >= total - 1:

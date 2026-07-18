@@ -21,6 +21,15 @@ class Browser(Protocol):
         """Return visible top-level comments and replies from the current page."""
         ...
 
+    def download_audio(self, url: str, out_dir: str) -> dict:
+        """Download the video's audio track into out_dir.
+
+        Returns {"audio_path": str, "video_id": str}. Raises on any failure
+        (browser, network, ffmpeg) — audio acquisition has no non-browser
+        fallback (ADR 0001), so failures propagate to the caller.
+        """
+        ...
+
 
 class Searcher(Protocol):
     """Keyword search over Douyin videos."""
@@ -46,6 +55,19 @@ class Llm(Protocol):
         ...
 
     def score_comment_quality(self, comments: list[dict], group_size: int = 5) -> list[dict]:
+        ...
+
+    def extract_transcript_places(self, transcript: str, city: str) -> list[str]:
+        """Place candidates from an ASR transcript. Implementations use a
+        transcript-aware prompt (homophone correction in context, ADR 0001)."""
+        ...
+
+    def extract_transcript_fish_species(self, transcript: str) -> list[str]:
+        ...
+
+    def summarize_transcript(self, transcript: str) -> dict:
+        """Human-readable {"summary": str, "extras": dict}. Never normalized
+        into spot data (see 转写摘要 in CONTEXT.md)."""
         ...
 
 
@@ -81,4 +103,26 @@ class SpotStore(Protocol):
         ...
 
     def insert_record(self, keyword: str, video: dict, spot: dict) -> None:
+        ...
+
+    def upsert_transcript(self, video_id: int, transcript: dict) -> None:
+        """Insert or replace the video's transcript row (one per video).
+
+        Keys: status ('ok'|'no_speech'|'error'), transcript_text, audio_path,
+        srt_path, model, error, raw_response_path, summary, extras_json.
+        """
+        ...
+
+
+class Transcriber(Protocol):
+    """Audio file -> transcript. Model quirks (container conversion, no-speech
+    detection) are encapsulated by implementations."""
+
+    def transcribe(self, audio_path: str, out_prefix: str | None = None) -> dict:
+        """Transcribe one audio file.
+
+        Returns {"status": "ok"|"no_speech", "text": str, "model": str,
+        "srt_path": str|None, "raw_response_path": str|None}.
+        Raises on API/IO failure — the caller records status='error'.
+        """
         ...

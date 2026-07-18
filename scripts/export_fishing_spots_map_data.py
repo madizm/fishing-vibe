@@ -17,6 +17,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))  # allow running the script directly without installing the package
 
+from spot_intake.adapters.sqlite_store import init_db
 from spot_intake.extract import extract_fish_species, normalize_fish_species
 
 DEFAULT_DB = ROOT / "data" / "fishing_spots.sqlite"
@@ -202,6 +203,7 @@ def load_comment_keyword_summaries(conn: sqlite3.Connection) -> dict[int, dict[s
 def export(db_path: Path, out_path: Path) -> dict[str, Any]:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    init_db(conn)  # shared schema contract from spot_intake (idempotent)
     comment_keyword_summaries = load_comment_keyword_summaries(conn)
     rows = conn.execute(
         """

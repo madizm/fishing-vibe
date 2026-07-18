@@ -26,13 +26,6 @@ sys.path.insert(0, str(ROOT))  # allow running the script directly without insta
 from spot_intake import Config, Intake, IntakeOptions
 from spot_intake.adapters import GeocodeSkill, NullLlm, OpenaiLlm, OpencliBrowser, OpencliDouyinSearch, SqliteSpotStore
 from spot_intake.fixtures import load_comments_fixture, load_extracted_fixture, load_search_item_fixture
-from spot_intake.proc import run  # noqa: F401  (re-exported for scripts/extract_douyin_video_comments.py)
-
-
-def extract_video_comments(session: str, scrolls: int = 0, wait_seconds: float = 2.0, max_comments: int = 100) -> list[dict]:
-    """Compat shim for scripts/extract_douyin_video_comments.py (slice 3 removes it)."""
-    with OpencliBrowser(session, cwd=ROOT) as browser:
-        return browser.extract_video_comments(scrolls=scrolls, wait_seconds=wait_seconds, max_comments=max_comments)
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,6 +53,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--extracted-text", default="", help="Saved raw extracted page text; implies --extract-only")
     ap.add_argument("--search-item-json", default="", help="Saved douyin search result/item JSON used as title/author/url context")
     ap.add_argument("--comments-json", default="", help="Saved comments JSON fixture; object with comments[] or a list")
+    ap.add_argument("--comments-out", default="", help="Open --url, extract visible comments, save them as a fixture JSON, then exit")
     args = ap.parse_args()
 
     if args.extracted_json or args.extracted_text or args.comments_json:
@@ -116,9 +110,26 @@ def run_extract_only(args: argparse.Namespace, config: Config) -> dict:
     return intake.extract(direct_url, search_item=search_item, extracted=extracted, comments=comments)
 
 
+def dump_comments(args: argparse.Namespace, config: Config) -> None:
+    """Replacement for the deleted extract_douyin_video_comments.py wrapper."""
+    url = args.url.strip()
+    if not url:
+        raise ValueError("--comments-out requires --url")
+    with OpencliBrowser(args.session, cwd=config.root) as browser:
+        browser.open(url)
+        comments = browser.extract_video_comments(scrolls=args.comment_scrolls, wait_seconds=args.comment_wait, max_comments=args.comment_max)
+    out = Path(args.comments_out)
+    out.write_text(json.dumps({"url": url, "comment_count": len(comments), "comments": comments}, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[done] wrote {len(comments)} comments to {out}", flush=True)
+
+
 def main() -> None:
     args = parse_args()
     config = Config.from_env()
+
+    if args.comments_out:
+        dump_comments(args, config)
+        return
 
     if args.extract_only:
         report = run_extract_only(args, config)

@@ -186,8 +186,9 @@ class Intake:
 
     # -- public interface -----------------------------------------------------
 
-    def collect_video(self, url: str, search_item: dict | None = None) -> IntakeReport:
+    def collect_video(self, url: str, search_item: dict | None = None, keyword: str | None = None) -> IntakeReport:
         opts = self.options
+        keyword = keyword or opts.keyword
         item = search_item or {"url": url, "desc": "", "author": ""}
         already_exists = self.store.video_exists(url)
         if already_exists and not opts.include_comments:
@@ -198,7 +199,7 @@ class Intake:
 
         extracted = self.browser.extract_video(url)
         video = parse_video(item, extracted, opts.city, self.llm)
-        video_id = self.store.upsert_video(opts.keyword, video)
+        video_id = self.store.upsert_video(keyword, video)
         if not video.get("title"):
             meta = self.store.video_metadata(video_id)
             if meta:
@@ -222,12 +223,12 @@ class Intake:
                     "source_text": video["raw_text"][:500],
                     **geo,
                 }
-                self.store.insert_record(opts.keyword, video, spot)
+                self.store.insert_record(keyword, video, spot)
                 inserted_places.add(place)
                 report.spots.append({"video": video["url"], "title": video["title"], "fish_species": video.get("fish_species", []), **spot})
 
         if opts.include_comments:
-            self._collect_comments(report, video_id, inserted_places)
+            self._collect_comments(report, video_id, inserted_places, keyword)
 
         report.spots_written = len(report.spots)
         report.spot_names = [s["place_name"] for s in report.spots]
@@ -289,7 +290,7 @@ class Intake:
 
     # -- internals --------------------------------------------------------------
 
-    def _collect_comments(self, report: IntakeReport, video_id: int, inserted_places: set[str]) -> None:
+    def _collect_comments(self, report: IntakeReport, video_id: int, inserted_places: set[str], keyword: str) -> None:
         opts = self.options
         video = report.video
         url = video["url"]
@@ -348,7 +349,7 @@ class Intake:
                 "quality_score_detail": place_quality.get("detail", ""),
                 **geo,
             }
-            self.store.insert_record(opts.keyword, video, spot)
+            self.store.insert_record(keyword, video, spot)
             inserted_places.add(place)
             report.spots.append({"video": video["url"], "title": video["title"], "fish_species": video.get("fish_species", []), **spot})
 

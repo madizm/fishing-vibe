@@ -1,27 +1,25 @@
 #!/usr/bin/env python3
-"""Rerun Douyin collection for videos whose fishing spots lack quality_score.
+"""Rerun intake for videos whose fishing spots lack quality_score.
 
-The collector can refresh an existing video by direct URL (`--url ...`). This
-helper finds videos linked to fishing_spots rows with NULL quality_score,
-deduplicates by video URL, then invokes collect_douyin_fishing_spots.py once per
-URL so comment extraction / LLM quality scoring can fill the missing scores.
+Finds videos linked to fishing_spots rows with NULL quality_score, deduplicates
+by video URL, then refreshes each through Intake.collect_video so comment
+extraction / LLM quality scoring can fill the missing scores.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import random
 import sqlite3
-import subprocess
 import sys
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DB = ROOT / "data" / "fishing_spots.sqlite"
-COLLECT_SCRIPT = ROOT / "scripts" / "collect_douyin_fishing_spots.py"
-DEFAULT_LLM_URL = os.getenv("OPENAI_BASE_URL", "http://100.90.54.85:8080/v1").rstrip("/") + "/chat/completions"
+sys.path.insert(0, str(ROOT))  # allow running the script directly without installing the package
+
+from spot_intake import Config, Intake, IntakeOptions
+from spot_intake.adapters import GeocodeSkill, NullLlm, OpenaiLlm, OpencliBrowser, SqliteSpotStore
 
 
 def load_urls(db_path: Path, limit: int = 0) -> list[dict]:
@@ -53,48 +51,6 @@ def load_urls(db_path: Path, limit: int = 0) -> list[dict]:
         conn.close()
 
 
-def build_collect_cmd(args: argparse.Namespace, item: dict) -> list[str]:
-    cmd = [
-        sys.executable,
-        str(COLLECT_SCRIPT),
-        "--url",
-        item["url"],
-        "--keyword",
-        args.keyword or item.get("keyword") or "武汉钓鱼",
-        "--city",
-        args.city,
-        "--session",
-        args.session,
-        "--llm-url",
-        args.llm_url,
-        "--comment-scrolls",
-        str(args.comment_scrolls),
-        "--comment-wait",
-        str(args.comment_wait),
-        "--comment-max",
-        str(args.comment_max),
-        "--comment-quality-group-size",
-        str(args.comment_quality_group_size),
-        "--comment-keyword-group-size",
-        str(args.comment_keyword_group_size),
-        # The outer helper handles throttling between URLs. The inner collector
-        # processes one URL per invocation, so keep its own delay at zero.
-        "--delay-min",
-        "0",
-        "--delay-max",
-        "0",
-    ]
-    if args.no_llm:
-        cmd.append("--no-llm")
-    if args.quiet_llm:
-        cmd.append("--quiet-llm")
-    if args.no_include_comments:
-        cmd.append("--no-include-comments")
-    else:
-        cmd.append("--include-comments")
-    return cmd
-
-
 def sleep_between(index: int, total: int, delay_min: float, delay_max: float) -> None:
     if index >= total - 1:
         return
@@ -106,17 +62,17 @@ def sleep_between(index: int, total: int, delay_min: float, delay_max: float) ->
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite database path")
+    ap.add_argument("--db", type=Path, default=None, help="SQLite database path (default: env or data/fishing_spots.sqlite)")
     ap.add_argument("--limit", type=int, default=0, help="Maximum number of distinct video URLs to process; 0 means all")
     ap.add_argument("--dry-run", action="store_true", help="Only print URLs that would be processed")
     ap.add_argument("--continue-on-error", action="store_true", help="Continue with remaining URLs if one collect run fails")
     ap.add_argument("--keyword", default="", help="Override keyword stored when rerunning collect; defaults to each video's DB keyword")
     ap.add_argument("--city", default="武汉")
     ap.add_argument("--session", default="douyin-missing-quality")
-    ap.add_argument("--llm-url", default=DEFAULT_LLM_URL, help="OpenAI-compatible /v1/chat/completions endpoint")
-    ap.add_argument("--no-llm", action="store_true", help="Forward --no-llm to collect")
-    ap.add_argument("--quiet-llm", action="store_true", help="Forward --quiet-llm to collect")
-    ap.add_argument("--no-include-comments", action="store_true", help="Forward --no-include-comments to collect")
+    ap.add_argument("--llm-url", default=None, help="OpenAI-compatible /v1/chat/completions endpoint (default: env or config)")
+    ap.add_argument("--no-llm", action="store_true", help="Disable LLM extraction and use rule fallbacks only")
+    ap.add_argument("--quiet-llm", action="store_true", help="Disable LLM debug logs")
+    ap.add_argument("--no-include-comments", action="store_true", help="Skip comment extraction and analysis")
     ap.add_argument("--comment-scrolls", type=int, default=0)
     ap.add_argument("--comment-wait", type=float, default=2.0)
     ap.add_argument("--comment-max", type=int, default=100)
@@ -126,34 +82,63 @@ def main() -> int:
     ap.add_argument("--delay-max", type=float, default=20.0, help="Maximum sleep seconds between URLs")
     args = ap.parse_args()
 
-    if not args.db.exists():
-        raise FileNotFoundError(args.db)
+    config = Config.from_env()
+    db_path = args.db or config.db_path
+    if not db_path.exists():
+        raise FileNotFoundError(db_path)
     if args.limit < 0:
         raise ValueError("--limit must be >= 0")
-    if args.delay_min < 0 or args.delay_max < args.delay_min:
-        raise ValueError("--delay-max must be >= --delay-min and delays must be non-negative")
 
-    items = load_urls(args.db, args.limit)
+    items = load_urls(db_path, args.limit)
     print(f"[info] found {len(items)} video URL(s) with NULL quality_score spots", flush=True)
     if not items:
         return 0
 
-    failures: list[tuple[str, int]] = []
-    for index, item in enumerate(items):
-        prefix = f"[{index + 1}/{len(items)}]"
-        title = item.get("title") or ""
-        print(f"{prefix} missing_spots={item['missing_spot_count']} url={item['url']} title={title[:80]}", flush=True)
-        cmd = build_collect_cmd(args, item)
-        print("[cmd] " + " ".join(cmd), flush=True)
-        if args.dry_run:
-            continue
-        proc = subprocess.run(cmd, cwd=ROOT, text=True)
-        if proc.returncode != 0:
-            failures.append((item["url"], proc.returncode))
-            print(f"[error] collect failed rc={proc.returncode}: {item['url']}", file=sys.stderr, flush=True)
-            if not args.continue_on_error:
-                return proc.returncode
-        sleep_between(index, len(items), args.delay_min, args.delay_max)
+    if args.dry_run:
+        for item in items:
+            keyword = args.keyword or item.get("keyword") or "武汉钓鱼"
+            print(f"[dry-run] missing_spots={item['missing_spot_count']} keyword={keyword} url={item['url']} title={(item.get('title') or '')[:80]}", flush=True)
+        return 0
+
+    options = IntakeOptions(
+        city=args.city,
+        keyword=args.keyword or "武汉钓鱼",
+        include_comments=not args.no_include_comments,
+        comment_scrolls=args.comment_scrolls,
+        comment_wait=args.comment_wait,
+        comment_max=args.comment_max,
+        comment_quality_group_size=args.comment_quality_group_size,
+        comment_keyword_group_size=args.comment_keyword_group_size,
+        delay_min=0,  # this script throttles between URLs itself
+        delay_max=0,
+    )
+    llm = NullLlm() if args.no_llm else OpenaiLlm(args.llm_url or config.llm_url, debug=not args.quiet_llm)
+    with SqliteSpotStore(db_path) as store, OpencliBrowser(args.session, cwd=config.root) as browser:
+        intake = Intake(
+            browser=browser,
+            llm=llm,
+            geocoder=GeocodeSkill(config.geocode_script, cwd=config.root),
+            store=store,
+            options=options,
+        )
+
+        failures: list[str] = []
+        for index, item in enumerate(items):
+            keyword = args.keyword or item.get("keyword") or "武汉钓鱼"
+            prefix = f"[{index + 1}/{len(items)}]"
+            print(f"{prefix} missing_spots={item['missing_spot_count']} keyword={keyword} url={item['url']} title={(item.get('title') or '')[:80]}", flush=True)
+            try:
+                report = intake.collect_video(item["url"], keyword=keyword)
+                print(
+                    f"{prefix} done: spots_written={report.spots_written} comments={report.comments_stored} quality_applied={report.quality_applied} skipped={report.skipped or '-'}",
+                    flush=True,
+                )
+            except Exception as exc:
+                failures.append(item["url"])
+                print(f"[error] collect failed: {item['url']}: {exc}", file=sys.stderr, flush=True)
+                if not args.continue_on_error:
+                    return 1
+            sleep_between(index, len(items), args.delay_min, args.delay_max)
 
     if failures:
         print(f"[done] completed with {len(failures)} failure(s)", file=sys.stderr, flush=True)

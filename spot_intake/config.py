@@ -49,6 +49,7 @@ class Config:
     asr_model: str
     mimo_api_key: str
     geocode_corrector: str
+    geocode_provider: str
 
     @classmethod
     def from_env(cls, root: Path | None = None) -> "Config":
@@ -67,6 +68,7 @@ class Config:
         asr_model = os.getenv("FISHING_VIBE_ASR_MODEL", DEFAULT_ASR_MODEL)
         mimo_api_key = os.getenv("MIMO_API_KEY", "")
         geocode_corrector = os.getenv("FISHING_VIBE_GEOCODE_CORRECTOR", "baidu")
+        geocode_provider = os.getenv("FISHING_VIBE_GEOCODE_PROVIDER", "baidu")
         return cls(
             root=root,
             db_path=db_path,
@@ -76,4 +78,5 @@ class Config:
             asr_model=asr_model,
             mimo_api_key=mimo_api_key,
             geocode_corrector=geocode_corrector,
+            geocode_provider=geocode_provider,
         )

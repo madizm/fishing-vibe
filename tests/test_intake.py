@@ -183,6 +183,9 @@ class FakeStore:
         self.calls.append(("upsert_transcript", transcript.get("status")))
         self.transcripts[video_id] = dict(transcript)
 
+    def transcript_for_video(self, video_id):
+        return self.transcripts.get(video_id)
+
 
 def make_intake(*, browser=None, llm=None, geocoder=None, store=None, searcher=None, transcriber=None,
                 **option_overrides):
@@ -485,3 +488,51 @@ def test_transcript_unavailable_video_is_terminal():
     assert report.transcript_status == "unavailable"
     assert store.transcripts[1]["status"] == "unavailable"  # terminal: never retried
     assert ("insert_record", "东湖", "video_text") in store.calls  # pipeline unaffected
+
+
+# --- re-extract from stored transcripts -----------------------------------------
+
+def _store_with_transcript(text="在府河用蚯蚓上了三条翘嘴", status="ok", existing_spots=(), metadata=None):
+    store = FakeStore(
+        existing_spots=existing_spots,
+        metadata=metadata or {"url": URL, "keyword": "武汉钓鱼", "title": "老视频", "author": "a",
+                              "publish_time": "2026-07-01 10:00", "raw_text": ""},
+    )
+    store.transcripts[1] = {"status": status, "transcript_text": text}
+    return store
+
+
+def test_reextract_appends_only_places_not_already_recorded():
+    store = _store_with_transcript(existing_spots=["东湖"])
+    llm = FakeLlm(transcript_places=["府河", "东湖"])
+    intake = make_intake(store=store, llm=llm, transcriber=FakeTranscriber())
+    result = intake.reextract_transcript_spots(1)
+
+    assert result["skipped"] is None
+    assert result["candidates"] == ["府河", "东湖"]
+    assert [s["place_name"] for s in result["spots_added"]] == ["府河"]  # 东湖 deduped
+    assert ("insert_record", "府河", "transcript") in store.calls
+    assert store.transcripts[1]["transcript_text"].startswith("在府河")  # read-only w.r.t. transcript
+
+
+def test_reextract_skips_when_no_usable_transcript():
+    store = FakeStore()
+    intake = make_intake(store=store, transcriber=FakeTranscriber())
+    assert intake.reextract_transcript_spots(1)["skipped"] == "no_usable_transcript"
+
+    store2 = _store_with_transcript(status="no_speech", text="")
+    intake2 = make_intake(store=store2, transcriber=FakeTranscriber())
+    assert intake2.reextract_transcript_spots(1)["skipped"] == "no_usable_transcript"
+
+
+def test_reextract_survives_geocoder_raising():
+    class ExplodingGeocoder(FakeGeocoder):
+        def geocode(self, place, city):
+            raise RuntimeError("geocode subprocess died")
+
+    store = _store_with_transcript()
+    intake = make_intake(store=store, geocoder=ExplodingGeocoder(), transcriber=FakeTranscriber())
+    result = intake.reextract_transcript_spots(1)
+
+    assert result["spots_added"] == []
+    assert not any(c[0] == "insert_record" for c in store.calls)

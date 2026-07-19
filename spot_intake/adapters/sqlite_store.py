@@ -143,10 +143,17 @@ class SqliteSpotStore:
         return int(row[0])
 
     def video_metadata(self, video_id: int) -> dict:
-        row = self.conn.execute("SELECT title, author, publish_time, raw_text FROM videos WHERE id=?", (video_id,)).fetchone()
+        row = self.conn.execute("SELECT title, author, publish_time, raw_text, url, keyword FROM videos WHERE id=?", (video_id,)).fetchone()
         if not row:
             return {}
-        return {"title": row[0] or "", "author": row[1] or "", "publish_time": row[2] or "", "raw_text": row[3] or ""}
+        return {
+            "title": row[0] or "",
+            "author": row[1] or "",
+            "publish_time": row[2] or "",
+            "raw_text": row[3] or "",
+            "url": row[4] or "",
+            "keyword": row[5] or "",
+        }
 
     def existing_spot_names(self, video_id: int) -> set[str]:
         return {str(row[0]) for row in self.conn.execute("SELECT place_name FROM fishing_spots WHERE video_id=?", (video_id,)) if row[0]}
@@ -265,6 +272,21 @@ class SqliteSpotStore:
             return None
         keys = ["video_id", "status", "transcript_text", "audio_path", "srt_path", "model", "error", "raw_response_path", "summary", "extras_json", "transcribed_at"]
         return dict(zip(keys, row))
+
+    def videos_with_transcript(self, status: str = "ok", limit: int = 0) -> list[dict]:
+        """Videos that have a transcript row with the given status."""
+        sql = """SELECT v.id, v.url, v.keyword, v.title
+                 FROM videos v JOIN video_transcripts t ON t.video_id = v.id
+                 WHERE t.status = ?
+                 ORDER BY v.id"""
+        params: tuple = (status,)
+        if limit > 0:
+            sql += " LIMIT ?"
+            params = (status, limit)
+        return [
+            {"id": int(r[0]), "url": r[1] or "", "keyword": r[2] or "", "title": r[3] or ""}
+            for r in self.conn.execute(sql, params)
+        ]
 
     def videos_pending_transcription(self, limit: int = 0) -> list[dict]:
         """Backfill targets: videos with no transcript row or status='error'.

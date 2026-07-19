@@ -93,6 +93,11 @@ class SpotStore(Protocol):
         ...
 
     def video_metadata(self, video_id: int) -> dict:
+        """Metadata for one video: title, author, publish_time, raw_text, url, keyword."""
+        ...
+
+    def transcript_for_video(self, video_id: int) -> dict | None:
+        """The video's transcript row, or None. Keys mirror upsert_transcript."""
         ...
 
     def existing_spot_names(self, video_id: int) -> set[str]:

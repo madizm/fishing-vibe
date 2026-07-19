@@ -429,6 +429,41 @@ def tianditu_geocode(address: str, tk: str) -> dict:
     return request_json(f"{TIANDITU_BASE_URL}?{query}", "天地图")
 
 
+def _tianditu_geocode_needs_autocorrect(result: dict, min_score: int = 80) -> bool:
+    if str(result.get("status")) != "0":
+        return True
+    location = result.get("location") or {}
+    if "lon" not in location or "lat" not in location:
+        return True
+    try:
+        return int(location.get("score") or 0) < min_score
+    except (TypeError, ValueError):
+        return True
+
+
+def tianditu_geocode_with_autocorrect(
+    address: str,
+    tk: str,
+    region: str = "",
+    min_score: int = 80,
+    candidate_limit: int = 8,
+) -> dict:
+    """先天地图地理编码；score 低于阈值时用天地图行政区划搜索纠错。
+    天地图坐标为 CGCS2000（≈WGS84），结果统一标记 _coord_system=wgs84。"""
+    original = tianditu_geocode(address, tk)
+    if not _tianditu_geocode_needs_autocorrect(original, min_score=min_score):
+        original.setdefault("_coord_system", "wgs84")
+        original.setdefault("_autocorrect", {
+            "applied": False,
+            "original_query": address,
+            "reason": "geocode_confidence_ok",
+        })
+        return original
+    corrected = _autocorrect_via_tianditu(original, address, tk, region=region, candidate_limit=candidate_limit)
+    corrected.setdefault("_coord_system", "wgs84")
+    return corrected
+
+
 def tianditu_reverse_geocode(lon: float, lat: float, tk: str) -> dict:
     if not (-180 <= lon <= 180 and -90 <= lat <= 90):
         raise ValueError("经纬度超出范围：lon 应在 [-180,180]，lat 应在 [-90,90]")
@@ -536,6 +571,13 @@ def main() -> None:
                     min_confidence=getattr(args, "min_confidence", 80),
                     corrector=corrector,
                     tianditu_tk=tianditu_tk,
+                )
+            elif provider == "tianditu" and getattr(args, "autocorrect", False):
+                result = tianditu_geocode_with_autocorrect(
+                    args.address,
+                    key,
+                    region=getattr(args, "region", ""),
+                    min_score=getattr(args, "min_confidence", 80),
                 )
             else:
                 result = geocode_fn(args.address, key)

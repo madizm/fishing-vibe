@@ -398,9 +398,18 @@ class Intake:
             video["fish_species_source"] = f"{source}+llm:transcript" if source else "llm:transcript"
             video["fish_confidence"] = max(float(video.get("fish_confidence", 0.0) or 0.0), 0.95)
 
-        # max_video_places applies per source: transcript candidates get their
-        # own budget, independent of the video_text candidates (ADR 0001).
+        added = self._insert_transcript_spots(video, video_id, inserted_places, keyword, places, text[:500])
+        spots_out.extend(added)
+        return "ok"
+
+    def _insert_transcript_spots(self, video: dict, video_id: int, inserted_places: set[str], keyword: str, places: list[str], source_text: str) -> list[dict]:
+        """Geocode transcript place candidates and insert the ones not already
+        recorded (per-source cap, first-come-first-served dedupe, ADR 0001).
+        Single insertion path shared by collect and re-extract."""
+        opts = self.options
+        url = video["url"]
         candidates = places if opts.max_video_places == 0 else places[: opts.max_video_places]
+        added: list[dict] = []
         for place in candidates:
             if place in inserted_places:
                 continue
@@ -415,13 +424,37 @@ class Intake:
                 "place_name": place,
                 "confidence": 0.9 if geo["geocode_score"] >= 90 else 0.7,
                 "source_type": "transcript",
-                "source_text": text[:500],
+                "source_text": source_text,
                 **geo,
             }
             self.store.insert_record(keyword, video, spot)
             inserted_places.add(place)
-            spots_out.append({"video": url, "title": video.get("title", ""), "fish_species": video.get("fish_species", []), **spot})
-        return "ok"
+            added.append({"video": url, "title": video.get("title", ""), "fish_species": video.get("fish_species", []), **spot})
+        return added
+
+    def reextract_transcript_spots(self, video_id: int) -> dict:
+        """Re-run place extraction from the STORED transcript text (no download,
+        no ASR) and append spots not already recorded for this video. Used to
+        re-harvest transcripts after prompt/geocoder improvements."""
+        opts = self.options
+        row = self.store.transcript_for_video(video_id)
+        text = str((row or {}).get("transcript_text") or "").strip()
+        if not row or row.get("status") != "ok" or not text:
+            return {"video_id": video_id, "skipped": "no_usable_transcript", "candidates": [], "spots_added": []}
+        video = {
+            "url": "",
+            "title": "",
+            "raw_text": "",
+            "fish_species": [],
+            "fish_species_source": "",
+            "fish_confidence": 0.0,
+            **self.store.video_metadata(video_id),
+        }
+        keyword = video.get("keyword") or opts.keyword
+        places = dedupe_places(self.llm.extract_transcript_places(text, opts.city))
+        inserted_places = self.store.existing_spot_names(video_id)
+        added = self._insert_transcript_spots(video, video_id, inserted_places, keyword, places, text[:500])
+        return {"video_id": video_id, "skipped": None, "candidates": places, "spots_added": added}
 
     def _collect_comments(self, report: IntakeReport, video_id: int, keyword: str) -> dict | None:
         """Read/analyze/store comments. Spot insertion is deferred (returned as

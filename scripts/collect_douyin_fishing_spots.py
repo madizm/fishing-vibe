@@ -89,7 +89,7 @@ def build_intake(args: argparse.Namespace, config: Config, *, with_store: bool) 
     return Intake(
         browser=OpencliBrowser(args.session, cwd=config.root),
         llm=llm,
-        geocoder=GeocodeSkill(config.geocode_script, cwd=config.root),
+        geocoder=GeocodeSkill(config.geocode_script, cwd=config.root, autocorrect_provider=config.geocode_corrector),
         store=store,
         searcher=OpencliDouyinSearch(cwd=config.root),
         transcriber=transcriber,

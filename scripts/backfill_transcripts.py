@@ -63,7 +63,7 @@ def main() -> int:
             intake = Intake(
                 browser=browser,
                 llm=llm,
-                geocoder=GeocodeSkill(config.geocode_script, cwd=config.root),
+                geocoder=GeocodeSkill(config.geocode_script, cwd=config.root, autocorrect_provider=config.geocode_corrector),
                 store=store,
                 transcriber=MimoTranscriber(api_key=config.mimo_api_key, model=config.asr_model),
                 options=options,

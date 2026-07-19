@@ -130,6 +130,7 @@ BAIDU_ENV_KEY = "BAIDU_AK"
 
 # 天地图
 TIANDITU_BASE_URL = "http://api.tianditu.gov.cn/geocoder"
+TIANDITU_SEARCH_URL = "http://api.tianditu.gov.cn/v2/search"
 TIANDITU_ENV_KEY = "TIANDITU_TK"
 
 
@@ -237,8 +238,11 @@ def baidu_geocode_with_autocorrect(
     region: str = "",
     min_confidence: int = 80,
     candidate_limit: int = 8,
+    corrector: str = "baidu",
+    tianditu_tk: str = "",
 ) -> dict:
-    """先地理编码；低置信度时用百度 POI 搜索返回更可能的候选。
+    """先地理编码；低置信度时用 POI 搜索返回更可能的候选（corrector 可选
+    百度或天地图）。
 
     不静默纠错：返回体会包含 `_autocorrect`，标明原查询、纠正后的 POI 名称、
     是否应用纠错，以及原始地理编码结果。
@@ -251,6 +255,9 @@ def baidu_geocode_with_autocorrect(
             "reason": "geocode_confidence_ok",
         })
         return original
+
+    if corrector == "tianditu":
+        return _autocorrect_via_tianditu(original, address, tianditu_tk, region=region, candidate_limit=candidate_limit)
 
     try:
         search = baidu_place_search(address, ak, region=region, limit=candidate_limit)
@@ -306,6 +313,102 @@ def baidu_geocode_with_autocorrect(
             "original_result": original.get("result"),
             "poi_query_type": query_type,
             "poi_result_type": search.get("result_type", ""),
+        },
+        "candidates": candidates,
+    }
+    return corrected
+
+
+def tianditu_poi_search(keyword: str, tk: str, region: str = "", limit: int = 10) -> dict:
+    """天地图地名搜索 V2（行政区划区域搜索），用于地理编码低置信度时的候选纠错。"""
+    post = {
+        "keyWord": keyword,
+        "queryType": "12",
+        "start": "0",
+        "count": str(max(1, min(int(limit), 300))),
+        "show": "2",
+    }
+    if region:
+        post["specify"] = region
+    query = urllib.parse.urlencode({"postStr": json.dumps(post, ensure_ascii=False), "type": "query", "tk": tk})
+    return request_json(f"{TIANDITU_SEARCH_URL}?{query}", "天地图POI搜索")
+
+
+def _simplify_tianditu_poi(item: dict) -> dict:
+    lonlat = str(item.get("lonlat", "") or "")
+    parts = lonlat.split(",")
+    lng = parts[0].strip() if len(parts) == 2 else ""
+    lat = parts[1].strip() if len(parts) == 2 else ""
+    return {
+        "name": item.get("name", ""),
+        "address": item.get("address", ""),
+        "province": item.get("province", ""),
+        "city": item.get("city", ""),
+        "area": item.get("county", ""),
+        "uid": item.get("hotPointID", ""),
+        "location": {"lng": lng, "lat": lat},
+    }
+
+
+def _autocorrect_via_tianditu(original: dict, address: str, tk: str, region: str = "", candidate_limit: int = 8) -> dict:
+    """低置信度时改用天地图行政区划搜索纠错。天地图坐标为 CGCS2000（≈WGS84），
+    结果标记 _coord_system=wgs84，下游坐标转换必须跳过。"""
+    # 搜索词去掉城市前缀（specify 已限定行政区），提高命中率
+    keyword = address[len(region):] if region and address.startswith(region) else address
+    try:
+        search = tianditu_poi_search(keyword, tk, region=region, limit=candidate_limit)
+    except Exception as exc:
+        original["_autocorrect"] = {
+            "applied": False,
+            "corrector": "tianditu",
+            "original_query": address,
+            "reason": "poi_search_failed",
+            "error": str(exc),
+            "original_result": original.get("result"),
+        }
+        return original
+
+    payload = search.get("result", search) or {}
+    candidates = [_simplify_tianditu_poi(item) for item in payload.get("pois") or []]
+    best = next((c for c in candidates if c["name"] == keyword), candidates[0] if candidates else None)
+    if not best or not best["location"]["lng"] or not best["location"]["lat"]:
+        original["_autocorrect"] = {
+            "applied": False,
+            "corrector": "tianditu",
+            "original_query": address,
+            "reason": "no_poi_candidate",
+            "original_result": original.get("result"),
+        }
+        original["candidates"] = candidates
+        return original
+
+    exact = best["name"] == keyword
+    corrected = {
+        "status": 0,
+        "result": {
+            "location": {
+                "lng": float(best["location"]["lng"]),
+                "lat": float(best["location"]["lat"]),
+            },
+            "precise": 1,
+            "confidence": 90 if exact else 85,
+            "comprehension": 100,
+            "level": "POI",
+            "name": best.get("name", ""),
+            "address": best.get("address", ""),
+            "province": best.get("province", ""),
+            "city": best.get("city", ""),
+            "area": best.get("area", ""),
+        },
+        "_coord_system": "wgs84",
+        "_autocorrect": {
+            "applied": True,
+            "corrector": "tianditu",
+            "original_query": address,
+            "corrected_query": best.get("name", ""),
+            "region": region,
+            "reason": "geocode_low_confidence_poi_candidate",
+            "original_result": original.get("result"),
         },
         "candidates": candidates,
     }
@@ -370,6 +473,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=80,
         help="触发 POI 纠错的百度 geocode 最低置信度（默认 80）",
     )
+    p_geocode.add_argument(
+        "--autocorrect-provider",
+        choices=["baidu", "tianditu"],
+        default="baidu",
+        help="POI 纠错搜索引擎（默认 baidu）；tianditu 需 TIANDITU_TK（服务端 key）",
+    )
 
     p_reverse = subparsers.add_parser("reverse", help="经纬度 -> 地址")
     p_reverse.add_argument("lon", type=float, help="经度")
@@ -418,11 +527,15 @@ def main() -> None:
     try:
         if args.command == "geocode":
             if provider == "baidu" and getattr(args, "autocorrect", False):
+                corrector = getattr(args, "autocorrect_provider", "baidu")
+                tianditu_tk = get_env(TIANDITU_ENV_KEY, "天地图") if corrector == "tianditu" else ""
                 result = baidu_geocode_with_autocorrect(
                     args.address,
                     key,
                     region=getattr(args, "region", ""),
                     min_confidence=getattr(args, "min_confidence", 80),
+                    corrector=corrector,
+                    tianditu_tk=tianditu_tk,
                 )
             else:
                 result = geocode_fn(args.address, key)
@@ -443,6 +556,8 @@ def _apply_coords_transform(result: dict, provider: str, to_sys: str) -> None:
     """对地理编码结果中的坐标进行转换。"""
     from_sys = "bd09" if provider == "baidu" else "wgs84"
     to = to_sys.lower().strip()
+    if result.get("_coord_system", "").lower() == to:
+        return  # 纠错结果已是目标坐标系（如天地图纠错返回 CGCS2000）
     if from_sys == to:
         return
     # 百度地图: result.location.lng / lat

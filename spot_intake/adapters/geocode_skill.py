@@ -14,9 +14,10 @@ from spot_intake.proc import run
 
 
 class GeocodeSkill:
-    def __init__(self, script_path: Path, cwd: Path | None = None) -> None:
+    def __init__(self, script_path: Path, cwd: Path | None = None, autocorrect_provider: str = "baidu") -> None:
         self.script_path = script_path
         self.cwd = cwd
+        self.autocorrect_provider = autocorrect_provider
 
     def geocode(self, place: str, city: str = "武汉") -> dict | None:
         query = place if place.startswith(city) else f"{city}{place}"
@@ -30,6 +31,8 @@ class GeocodeSkill:
                 "--to",
                 "wgs84",
                 "--autocorrect",
+                "--autocorrect-provider",
+                self.autocorrect_provider,
                 "--region",
                 city,
                 query,

@@ -10,6 +10,11 @@ from __future__ import annotations
 from typing import Protocol
 
 
+class VideoUnavailable(RuntimeError):
+    """The video page redirected away (deleted/private/moderated). Terminal —
+    retrying can never succeed, unlike transient download/ASR errors."""
+
+
 class Browser(Protocol):
     """Page-level interaction with a Douyin video page."""
 
@@ -108,8 +113,10 @@ class SpotStore(Protocol):
     def upsert_transcript(self, video_id: int, transcript: dict) -> None:
         """Insert or replace the video's transcript row (one per video).
 
-        Keys: status ('ok'|'no_speech'|'error'), transcript_text, audio_path,
-        srt_path, model, error, raw_response_path, summary, extras_json.
+        Keys: status ('ok'|'no_speech'|'error'|'unavailable' — the latter two
+        differ in that 'error' is retried, the rest are terminal),
+        transcript_text, audio_path, srt_path, model, error, raw_response_path,
+        summary, extras_json.
         """
         ...
 

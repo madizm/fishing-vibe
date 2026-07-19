@@ -455,3 +455,33 @@ def test_collect_transcript_backfills_existing_video():
     # 东湖 already a spot -> only 府河 added
     assert [s["place_name"] for s in result["spots_added"]] == ["府河"]
     assert ("insert_record", "府河", "transcript") in store.calls
+
+
+def test_transcript_survives_geocoder_raising():
+    class ExplodingGeocoder(FakeGeocoder):
+        def geocode(self, place, city):
+            raise RuntimeError("geocode subprocess died")
+
+    store = FakeStore()
+    intake = make_intake(store=store, geocoder=ExplodingGeocoder(), transcriber=FakeTranscriber())
+    report = intake.collect_video(URL)
+
+    assert report.transcript_status == "ok"  # transcript itself unaffected
+    assert store.transcripts[1]["status"] == "ok"
+    assert not any(c[0] == "insert_record" for c in store.calls)  # no spots, but no crash
+
+
+def test_transcript_unavailable_video_is_terminal():
+    from spot_intake.ports import VideoUnavailable
+
+    class GoneBrowser(FakeBrowser):
+        def download_audio(self, url, out_dir):
+            raise VideoUnavailable("video 123 redirected to /jingxuan")
+
+    store = FakeStore()
+    intake = make_intake(browser=GoneBrowser(), store=store, transcriber=FakeTranscriber())
+    report = intake.collect_video(URL)
+
+    assert report.transcript_status == "unavailable"
+    assert store.transcripts[1]["status"] == "unavailable"  # terminal: never retried
+    assert ("insert_record", "东湖", "video_text") in store.calls  # pipeline unaffected

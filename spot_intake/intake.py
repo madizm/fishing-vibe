@@ -24,7 +24,7 @@ from spot_intake.extract import (
     extract_fish_species,
     normalize_fish_species,
 )
-from spot_intake.ports import Browser, Geocoder, Llm, Searcher, SpotStore, Transcriber
+from spot_intake.ports import Browser, Geocoder, Llm, Searcher, SpotStore, Transcriber, VideoUnavailable
 from spot_intake.vocabulary import PLACE_PATTERNS
 
 
@@ -70,7 +70,7 @@ class IntakeReport:
     quality_applied: bool = False
     spots: list[dict] = field(default_factory=list)  # full spot records, for CLI output
     comment_result: dict | None = None  # analysis summary, for CLI output
-    transcript_status: str | None = None  # "ok" | "no_speech" | "error" | None (not attempted)
+    transcript_status: str | None = None  # "ok" | "no_speech" | "error" | "unavailable" | None (not attempted)
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +218,11 @@ class Intake:
         if not already_exists:
             video_places = video["place_candidates"] if opts.max_video_places == 0 else video["place_candidates"][: opts.max_video_places]
             for place in video_places:
-                geo = self.geocoder.geocode(place, opts.city)
+                try:
+                    geo = self.geocoder.geocode(place, opts.city)
+                except Exception as exc:
+                    print(f"[warn] geocode failed for video-text place {place!r} ({url}): {exc}", file=sys.stderr, flush=True)
+                    continue
                 if not geo:
                     continue
                 spot = {
@@ -339,6 +343,15 @@ class Intake:
         try:
             media = self.browser.download_audio(url, opts.downloads_dir)
             result = self.transcriber.transcribe(media["audio_path"])
+        except VideoUnavailable as exc:
+            # Terminal (deleted/private): never retried, like no_speech.
+            print(f"[info] video unavailable, marking terminal: {url}: {exc}", file=sys.stderr, flush=True)
+            self.store.upsert_transcript(video_id, {
+                "status": "unavailable", "error": str(exc)[:500], "transcript_text": "",
+                "audio_path": "", "srt_path": "", "model": "",
+                "raw_response_path": "", "summary": "", "extras_json": "",
+            })
+            return "unavailable"
         except Exception as exc:
             print(f"[warn] transcription failed for {url}: {exc}", file=sys.stderr, flush=True)
             self.store.upsert_transcript(video_id, {
@@ -391,7 +404,11 @@ class Intake:
         for place in candidates:
             if place in inserted_places:
                 continue
-            geo = self.geocoder.geocode(place, opts.city)
+            try:
+                geo = self.geocoder.geocode(place, opts.city)
+            except Exception as exc:
+                print(f"[warn] geocode failed for transcript place {place!r} ({url}): {exc}", file=sys.stderr, flush=True)
+                continue
             if not geo:
                 continue
             spot = {
@@ -470,7 +487,11 @@ class Intake:
             place = clue.get("place_name", "")
             if not place or place in inserted_places:
                 continue
-            geo = self.geocoder.geocode(place, opts.city)
+            try:
+                geo = self.geocoder.geocode(place, opts.city)
+            except Exception as exc:
+                print(f"[warn] geocode failed for comment place {place!r} ({video['url']}): {exc}", file=sys.stderr, flush=True)
+                continue
             if not geo or geo["geocode_score"] < 80:
                 continue
             source_text = str(clue.get("evidence") or "").strip()

@@ -2,7 +2,9 @@
 
 收录 pipeline 新增第三类文本来源：视频音轨经 ASR 转写出的 **转写文本 (transcript)**，与页面文本、评论并列，走同一套 LLM 提取 + 词汇归一化 + geocode（含 POI 自动纠错）后落库，`source_type = "transcript"`，置信度与 `video_text` 同档（0.9/0.7）。口播是钓鱼视频中钓点信息密度最高的来源（"今天在府河用蚯蚓上了三条翘嘴"），而页面文本常只有标题和话题标签。
 
-持久化为 `video_transcripts` 表（`video_id UNIQUE`，随 `videos` 级联删除）：transcript 文本、音频文件路径（`downloads/{vid}.m4a`，mp4 即删）、ASR raw response 路径、三态 `status`（`ok` / `no_speech` / `error`）、以及 LLM 对人读的产出 `summary` / `extras_json`（视频维度，永不归一化进钓点数据；展示层另见 issue #1）。
+持久化为 `video_transcripts` 表（`video_id UNIQUE`，随 `videos` 级联删除）：transcript 文本、音频文件路径（`downloads/{vid}.m4a`，mp4 即删）、ASR raw response 路径、四态 `status`、以及 LLM 对人读的产出 `summary` / `extras_json`（视频维度，永不归一化进钓点数据；展示层另见 issue #1）。
+
+**status 四态**（回填实战后修订，原为三态）：`ok`、`error`（瞬时失败，回填重试）、两个终态不再重试——`no_speech`（纯 BGM 无人声）与 `unavailable`（视频已删/私密/被处理，页面重定向到精选流，`Browser` 抛 `VideoUnavailable`）。
 
 ## Decisions
 
@@ -10,7 +12,7 @@
 
 2. **LLM 多次单任务调用，不用一次复合调用。** transcript 的提取 = 复用 `extract_places` / `extract_fish_species` + 新增 `summarize_transcript`（summary/extras 合一次调，因描述性产出容错高）。取舍依据：可能使用低成本模型，弱模型在复合指令 + 长 JSON 输出上不可靠；成本优先于调用次数。
 
-3. **转写失败非致命。** 三类文本来源互为冗余：转写失败只记 `status='error'`，视频凭其余来源照常收录，回填脚本（`scripts/backfill_transcripts.py`，断点续跑）按 `status='error'` 重试。`no_speech`（纯 BGM 无人声）与 `error` 严格区分，永不重试。判定启发式（空文本/语气词 → `no_speech`）封在 Mimo 适配器内。
+3. **转写失败非致命。** 三类文本来源互为冗余：转写失败只记 `status='error'`，视频凭其余来源照常收录，回填脚本（`scripts/backfill_transcripts.py`，断点续跑）按 `status='error'` 重试。`no_speech` 与 `unavailable` 是终态，永不重试。`no_speech` 判定启发式（空文本/语气词）封在 Mimo 适配器内；`unavailable` 判定（页面重定向）封在浏览器适配器内。
 
 4. **ASR 谐音错字的两道防线。** 首选：transcript 提取 prompt 下谐音纠正指令——纠正是语境理解任务，提取时语境最全（独立 prompt 变体，不污染页面文本 prompt）。兜底：geocoder 已有的低置信度 POI 自动纠错 + `--region` 城市限制。不加独立的"地名校正"LLM 调用（弱模型干细活更差，且白增调用）；若某类错字系统性出现，再往 `vocabulary.py` 加谐音词表。
 

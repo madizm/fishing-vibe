@@ -70,7 +70,18 @@ def main() -> int:
             )
             results: list[dict] = []
             for index, video in enumerate(pending):
-                result = intake.collect_transcript(video["id"], video["url"], keyword=video["keyword"] or None)
+                try:
+                    result = intake.collect_transcript(video["id"], video["url"], keyword=video["keyword"] or None)
+                except Exception as exc:
+                    # One bad video must never kill the run: record it as an
+                    # error row so a later run retries it.
+                    print(f"[{index + 1}/{len(pending)}] {video['url']} -> error (unhandled: {exc})", file=sys.stderr, flush=True)
+                    store.upsert_transcript(video["id"], {
+                        "status": "error", "error": f"unhandled: {str(exc)[:480]}", "transcript_text": "",
+                        "audio_path": "", "srt_path": "", "model": "",
+                        "raw_response_path": "", "summary": "", "extras_json": "",
+                    })
+                    result = {"video_id": video["id"], "url": video["url"], "status": "error", "spots_added": []}
                 print(f"[{index + 1}/{len(pending)}] {video['url']} -> {result['status']} (+{len(result['spots_added'])} spots)", flush=True)
                 results.append(result)
                 if index < len(pending) - 1:

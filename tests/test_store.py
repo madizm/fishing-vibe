@@ -144,12 +144,14 @@ def test_videos_pending_transcription_targets_missing_and_error_only(tmp_path):
         v2 = store.upsert_video("武汉钓鱼", {**VIDEO, "url": "https://www.douyin.com/video/1000"})
         v3 = store.upsert_video("武汉钓鱼", {**VIDEO, "url": "https://www.douyin.com/video/1001"})
         v4 = store.upsert_video("武汉钓鱼", {**VIDEO, "url": "https://www.douyin.com/video/1002"})
+        v5 = store.upsert_video("武汉钓鱼", {**VIDEO, "url": "https://www.douyin.com/video/1003"})
         store.upsert_transcript(v2, {**TRANSCRIPT, "status": "ok"})
         store.upsert_transcript(v3, {**TRANSCRIPT, "status": "no_speech", "transcript_text": ""})
         store.upsert_transcript(v4, {**TRANSCRIPT, "status": "error", "error": "boom"})
+        store.upsert_transcript(v5, {**TRANSCRIPT, "status": "unavailable", "transcript_text": ""})
 
         pending = store.videos_pending_transcription()
-        assert [v["id"] for v in pending] == [v1, v4]  # no row + error; ok/no_speech skipped (resume)
+        assert [v["id"] for v in pending] == [v1, v4]  # no row + error; ok/no_speech/unavailable skipped
         assert pending[0]["url"] == VIDEO["url"]
         assert pending[0]["keyword"] == "武汉钓鱼"
 

@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 from spot_intake.extract import parse_douyin_comment_time
+from spot_intake.ports import VideoUnavailable
 from spot_intake.proc import run
 
 # Focused DOM extract of only the current video's info card. A whole-page
@@ -205,6 +206,10 @@ class OpencliBrowser:
 
         self.open(url)
         run(["opencli", "browser", self.session, "wait", "time", "5"], timeout=60, cwd=self.cwd)
+        current_url = str(self.eval("(() => location.href)()") or "")
+        if vid != "douyin-video" and f"/video/{vid}" not in current_url and f"/note/{vid}" not in current_url:
+            # Deleted/private/moderated videos redirect to the 精选 feed.
+            raise VideoUnavailable(f"video {vid} redirected to {current_url[:80]}")
         raw = run(["opencli", "browser", self.session, "eval", _MEDIA_URL_JS], timeout=90, cwd=self.cwd).strip()
         media_url = ""
         if raw:

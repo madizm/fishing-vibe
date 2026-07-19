@@ -8,7 +8,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from spot_intake.extract import normalize_comment_keyword, normalize_comment_keyword_category
+from spot_intake.extract import classify_place_name, normalize_comment_keyword, normalize_comment_keyword_category, refine_precision
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -103,7 +103,15 @@ def init_db(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE fishing_spots ADD COLUMN quality_score_source TEXT")
     if "quality_score_detail" not in columns:
         conn.execute("ALTER TABLE fishing_spots ADD COLUMN quality_score_detail TEXT")
+    if "precision" not in columns:
+        conn.execute("ALTER TABLE fishing_spots ADD COLUMN precision TEXT")
     conn.execute("UPDATE fishing_spots SET source_type='video_text' WHERE source_type IS NULL OR source_type='' ")
+    # Backfill precision for pre-tiering rows (deterministic classifier, CONTEXT.md).
+    for row_id, place_name, query_name, level in conn.execute(
+        "SELECT id, place_name, query_name, geocode_level FROM fishing_spots WHERE precision IS NULL OR precision=''"
+    ).fetchall():
+        precision = refine_precision(classify_place_name(place_name or ""), {"geocode_level": level or "", "query_name": query_name or ""})
+        conn.execute("UPDATE fishing_spots SET precision=? WHERE id=?", (precision, row_id))
 
 
 class SqliteSpotStore:
@@ -307,9 +315,12 @@ class SqliteSpotStore:
     def insert_record(self, keyword: str, video: dict, spot: dict) -> None:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         video_id = self.upsert_video(keyword, video)
+        # The persistence gate: precision must be classified before insert
+        # (normally set by the intake loops; compute here if missing).
+        precision = spot.get("precision") or refine_precision(classify_place_name(spot["place_name"]), spot)
         self.conn.execute(
-            """INSERT INTO fishing_spots(video_id, place_name, query_name, longitude, latitude, fish_species, fish_species_source, fish_confidence, geocode_score, geocode_level, confidence, source_type, source_text, quality_score, quality_score_source, quality_score_detail, created_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            """INSERT INTO fishing_spots(video_id, place_name, query_name, longitude, latitude, fish_species, fish_species_source, fish_confidence, geocode_score, geocode_level, confidence, source_type, source_text, quality_score, quality_score_source, quality_score_detail, precision, created_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 video_id,
                 spot["place_name"],
@@ -327,6 +338,7 @@ class SqliteSpotStore:
                 spot.get("quality_score"),
                 spot.get("quality_score_source", ""),
                 spot.get("quality_score_detail", ""),
+                precision,
                 now,
             ),
         )

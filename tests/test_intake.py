@@ -148,6 +148,7 @@ class FakeStore:
         self.metadata = metadata or {}
         self.calls = []
         self.transcripts = {}
+        self.precisions = {}
         self._next_video_id = 1
 
     def video_exists(self, url):
@@ -178,6 +179,7 @@ class FakeStore:
     def insert_record(self, keyword, video, spot):
         self.calls.append(("insert_record", spot["place_name"], spot["source_type"]))
         self.spots_by_video.setdefault(1, set()).add(spot["place_name"])
+        self.precisions[spot["place_name"]] = spot.get("precision")
 
     def upsert_transcript(self, video_id, transcript):
         self.calls.append(("upsert_transcript", transcript.get("status")))
@@ -536,3 +538,44 @@ def test_reextract_survives_geocoder_raising():
 
     assert result["spots_added"] == []
     assert not any(c[0] == "insert_record" for c in store.calls)
+
+
+# --- 精度分级 (precision) --------------------------------------------------------
+
+def test_reject_candidates_never_cost_a_geocode_call():
+    geocoder = FakeGeocoder()
+    llm = FakeLlm(places=["武昌区", "长江", "东湖"])
+    intake = make_intake(llm=llm, geocoder=geocoder, include_transcript=False)
+    report = intake.collect_video(URL)
+
+    assert ("insert_record", "东湖", "video_text") in [c for c in intake.store.calls if c[0] == "insert_record"]
+    geocoded = [place for place, _ in geocoder.calls]
+    assert "武昌区" not in geocoded and "长江" not in geocoded  # rejected pre-geocode
+    assert report.spot_names == ["东湖"]
+
+
+def test_segment_precision_persisted_on_spot():
+    store = FakeStore()
+    llm = FakeLlm(places=["府河", "东湖"])
+    intake = make_intake(store=store, llm=llm, include_transcript=False)
+    intake.collect_video(URL)
+
+    assert store.precisions["府河"] == "segment"  # bare tributary
+    assert store.precisions["东湖"] == "point"  # compact lake
+
+
+def test_refine_rejects_district_alias_after_geocode():
+    class DistrictGeocoder(FakeGeocoder):
+        def geocode(self, place, city):
+            result = super().geocode(place, city)
+            if place == "汉南":
+                result["query_name"] = "汉南区"
+            return result
+
+    store = FakeStore()
+    llm = FakeLlm(places=["汉南", "东湖"])
+    intake = make_intake(store=store, llm=llm, geocoder=DistrictGeocoder(), include_transcript=False)
+    intake.collect_video(URL)
+
+    inserted = [c[1] for c in store.calls if c[0] == "insert_record"]
+    assert "汉南" not in inserted and "东湖" in inserted

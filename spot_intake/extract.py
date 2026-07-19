@@ -10,13 +10,19 @@ import re
 from datetime import datetime, timedelta
 
 from spot_intake.vocabulary import (
+    ADMIN_EXCEPTION_SUFFIXES,
+    ADMIN_SUFFIXES,
     COMMENT_KEYWORD_CATEGORIES,
     COMMENT_KEYWORD_CATEGORY_ALIASES,
     COMMENT_NOISE,
     COMMENT_PLACE_HINTS,
     FISH_PATTERNS,
+    GENERIC_PLACE_BLOCKLIST,
+    LINEAR_WATER_SUFFIXES,
     LLM_TEXT_KEEP_HINTS,
     LLM_TEXT_NOISE,
+    MAIN_STEM_WATER_BODIES,
+    SEGMENT_SUFFIXES,
 )
 
 
@@ -197,6 +203,51 @@ def dedupe_places(places: list[str]) -> list[str]:
             cleaned.append(place)
     # Prefer more specific names: remove shorter names contained in a longer candidate.
     return [p for p in cleaned if not any(p != q and p in q for q in cleaned)]
+
+
+# ---------------------------------------------------------------------------
+# 精度分级 (precision): name-only classification + post-geocode refinement.
+# Tiers: "point" (navigable anchor) | "segment" (coarse but meaningful area) |
+# "reject" (not a 钓点). See CONTEXT.md.
+# ---------------------------------------------------------------------------
+
+def _is_admin_name(name: str) -> bool:
+    return name.endswith(ADMIN_SUFFIXES) and not name.endswith(ADMIN_EXCEPTION_SUFFIXES)
+
+
+def classify_place_name(name: str) -> str:
+    """Name-only precision classification, applied before geocoding (rejects
+    here never cost a geocode call)."""
+    n = str(name).strip()
+    if not n or n in GENERIC_PLACE_BLOCKLIST:
+        return "reject"
+    if n in MAIN_STEM_WATER_BODIES:
+        return "reject"
+    if n.endswith(SEGMENT_SUFFIXES):
+        return "segment"  # 片区/社区 etc. end with 区 but are not districts — check first
+    if _is_admin_name(n):
+        return "reject"
+    if n.endswith(LINEAR_WATER_SUFFIXES):
+        return "segment"
+    return "point"
+
+
+def refine_precision(precision: str, geocode: dict) -> str:
+    """Post-geocode adjustment using the geocoder's level and resolved name.
+    Catches district aliases the name-only pass can't know (汉南 -> 汉南区)."""
+    if precision == "reject":
+        return "reject"
+    level = str(geocode.get("geocode_level", ""))
+    # "区县"/"城市" level = the geocoder only resolved to admin granularity —
+    # the coordinates are the admin centroid, not the place. Always garbage.
+    if level in ("区县", "城市"):
+        return "reject"
+    query_name = str(geocode.get("query_name", ""))
+    if _is_admin_name(query_name):
+        return "reject"
+    if level in ("乡镇", "村庄"):
+        return "segment"
+    return precision
 
 
 def format_comments_for_llm(comments: list[dict], max_chars: int = 8000, start_index: int = 1) -> str:

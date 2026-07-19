@@ -13,6 +13,7 @@ Domain glossary for fishing-vibe. Use these terms in code, issues, and reviews �
 - **转写文本 (transcript)** — the text produced by 转写. A first-class text source for 收录, on par with page text and comments: it is cleaned, sent through the same LLM extraction and vocabulary normalization, and its contributions are marked with `source_type = "transcript"`.
 - **转写摘要 (transcript summary)** — a human-readable LLM summary of a transcript, plus `extras` (钓法/饵料, 渔获, 出钓时间…). Video-dimensional, persisted with the transcript, for people — never normalized into 钓点 data.
 - **地名候选 (place candidates)** — extracted place names before geocoding; a candidate becomes a 钓点 only after the geocoder confirms it.
+- **精度分级 (precision)** — every 钓点 carries one of two tiers. **精确点 (point)**: a directly navigable anchor (POI, bridge, sluice, landmark); normal map pin. **河段片区 (segment)**: coarse but meaningful — a bare tributary name (府河), a village/subdistrict/片区; de-emphasized "approximate area" marker. Districts/counties, main-stem rivers (长江/汉江), and anchorless generics (凼子, 河边) are NOT 钓点: they are rejected deterministically (vocabulary + geocode_level) before persistence. See issue #3 for the future water-body hierarchy.
 - **坐标系 (coordinate systems)** — WGS84 is the canonical storage/exchange CRS (web/Tianditu). GCJ-02 is produced at build time for the WeChat miniprogram. BD09 appears only at the Baidu geocode API boundary.
 
 ## Conventions

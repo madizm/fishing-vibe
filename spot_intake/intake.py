@@ -18,11 +18,13 @@ from dataclasses import dataclass, field
 from spot_intake.extract import (
     aggregate_comment_keywords,
     aggregate_quality_scores,
+    classify_place_name,
     clean_text_for_llm,
     dedupe_places,
     extract_comment_spot_clues_from_comments,
     extract_fish_species,
     normalize_fish_species,
+    refine_precision,
 )
 from spot_intake.ports import Browser, Geocoder, Llm, Searcher, SpotStore, Transcriber, VideoUnavailable
 from spot_intake.vocabulary import PLACE_PATTERNS
@@ -218,6 +220,10 @@ class Intake:
         if not already_exists:
             video_places = video["place_candidates"] if opts.max_video_places == 0 else video["place_candidates"][: opts.max_video_places]
             for place in video_places:
+                precision = classify_place_name(place)
+                if precision == "reject":
+                    print(f"[info] reject non-spot place candidate {place!r} ({url})", file=sys.stderr, flush=True)
+                    continue
                 try:
                     geo = self.geocoder.geocode(place, opts.city)
                 except Exception as exc:
@@ -225,11 +231,16 @@ class Intake:
                     continue
                 if not geo:
                     continue
+                precision = refine_precision(precision, geo)
+                if precision == "reject":
+                    print(f"[info] reject admin-level geocode result for {place!r} ({url})", file=sys.stderr, flush=True)
+                    continue
                 spot = {
                     "place_name": place,
                     "confidence": 0.9 if geo["geocode_score"] >= 90 else 0.7,
                     "source_type": "video_text",
                     "source_text": video["raw_text"][:500],
+                    "precision": precision,
                     **geo,
                 }
                 self.store.insert_record(keyword, video, spot)
@@ -413,6 +424,10 @@ class Intake:
         for place in candidates:
             if place in inserted_places:
                 continue
+            precision = classify_place_name(place)
+            if precision == "reject":
+                print(f"[info] reject non-spot place candidate {place!r} ({url})", file=sys.stderr, flush=True)
+                continue
             try:
                 geo = self.geocoder.geocode(place, opts.city)
             except Exception as exc:
@@ -420,11 +435,16 @@ class Intake:
                 continue
             if not geo:
                 continue
+            precision = refine_precision(precision, geo)
+            if precision == "reject":
+                print(f"[info] reject admin-level geocode result for {place!r} ({url})", file=sys.stderr, flush=True)
+                continue
             spot = {
                 "place_name": place,
                 "confidence": 0.9 if geo["geocode_score"] >= 90 else 0.7,
                 "source_type": "transcript",
                 "source_text": source_text,
+                "precision": precision,
                 **geo,
             }
             self.store.insert_record(keyword, video, spot)
@@ -520,12 +540,20 @@ class Intake:
             place = clue.get("place_name", "")
             if not place or place in inserted_places:
                 continue
+            precision = classify_place_name(place)
+            if precision == "reject":
+                print(f"[info] reject non-spot comment place {place!r} ({video['url']})", file=sys.stderr, flush=True)
+                continue
             try:
                 geo = self.geocoder.geocode(place, opts.city)
             except Exception as exc:
                 print(f"[warn] geocode failed for comment place {place!r} ({video['url']}): {exc}", file=sys.stderr, flush=True)
                 continue
             if not geo or geo["geocode_score"] < 80:
+                continue
+            precision = refine_precision(precision, geo)
+            if precision == "reject":
+                print(f"[info] reject admin-level geocode result for {place!r} ({video['url']})", file=sys.stderr, flush=True)
                 continue
             source_text = str(clue.get("evidence") or "").strip()
             if clue.get("comment_ids"):
@@ -541,6 +569,7 @@ class Intake:
                 "quality_score": place_quality.get("quality_score"),
                 "quality_score_source": "comment_llm" if place_quality.get("quality_score") is not None else "",
                 "quality_score_detail": place_quality.get("detail", ""),
+                "precision": precision,
                 **geo,
             }
             self.store.insert_record(keyword, video, spot)

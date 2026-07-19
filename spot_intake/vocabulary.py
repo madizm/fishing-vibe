@@ -18,6 +18,33 @@ COMMENT_PLACE_HINTS = [
     "江", "河", "湖", "水库", "江滩", "闸", "桥", "泵站", "水厂", "码头", "村", "湾", "港", "沟", "渠", "公园",
 ]
 
+# ---------------------------------------------------------------------------
+# 精度分级 (precision) lexicons — see CONTEXT.md. Classification itself lives
+# in extract.py (classify_place_name / refine_precision); these are the tables.
+# ---------------------------------------------------------------------------
+
+# Anchorless generics: no navigable anchor, no information ("在凼子钓" ≈ "在塘里钓").
+# 泛词+地标（"某某停车场附近"）不归这里管——LLM 提取的应是锚点本身。
+GENERIC_PLACE_BLOCKLIST = {
+    "凼子", "塘子", "河边", "江边", "湖边", "水库边", "附近", "钓点", "野钓", "钓场", "鱼池",
+}
+
+# Main-stem rivers: a bare name carries no actionable location (长江/汉江).
+# 支流（府河、东荆河、滠水…）不在此列——光秃支流名是 segment，不是 reject。
+MAIN_STEM_WATER_BODIES = {"长江", "汉江"}
+
+# Administrative suffixes → reject, unless the name ends with a real-place
+# exception (吹笛景区 is a scenic area, not a district).
+ADMIN_SUFFIXES = ("区", "县")
+ADMIN_EXCEPTION_SUFFIXES = ("景区", "湖区", "园区", "度假区", "旅游区", "保护区", "示范区")
+
+# Coarse-but-meaningful area suffixes → segment (村居/街道 granularity has value).
+SEGMENT_SUFFIXES = ("街道", "镇", "乡", "村", "社区", "片区")
+
+# Linear water bodies cannot be pinned to a point → segment.
+# (湖/水库/塘/湾 are compact bodies — a geocoder point on them is meaningful.)
+LINEAR_WATER_SUFFIXES = ("河", "江", "港", "沟", "渠", "溪", "汊", "水")
+
 COMMENT_NOISE = {"全部评论", "留下你的精彩评论吧", "大家都在搜：", "分享", "回复", "作者", "加载中", "关注", "推荐视频"}
 
 COMMENT_KEYWORD_CATEGORIES = {

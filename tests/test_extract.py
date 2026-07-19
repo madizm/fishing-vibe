@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from spot_intake.extract import (
+    classify_place_name,
+    refine_precision,
     aggregate_comment_keywords,
     aggregate_quality_scores,
     clean_text_for_llm,
@@ -254,3 +256,50 @@ def test_comment_spot_clues_from_saved_fixture():
     # rule-based clues are a subset relationship with the candidate filter:
     # no clue may come from a line that fails is_comment_candidate
     assert all(is_comment_candidate(c["text"]) for c in clues)
+
+
+# --- 精度分级 (precision) --------------------------------------------------------
+
+def test_classify_rejects_anchorless_generics_and_main_stems():
+    assert classify_place_name("凼子") == "reject"
+    assert classify_place_name("河边") == "reject"
+    assert classify_place_name("长江") == "reject"
+    assert classify_place_name("汉江") == "reject"
+
+
+def test_classify_rejects_admin_names_but_keeps_scenic_exceptions():
+    assert classify_place_name("武昌区") == "reject"
+    assert classify_place_name("洪山区") == "reject"
+    assert classify_place_name("新洲县") == "reject"
+    assert classify_place_name("吹笛景区") == "point"  # 景区 is a place, not a district
+    assert classify_place_name("东湖风景区") == "point"
+
+
+def test_classify_segments_tributaries_and_village_granularity():
+    assert classify_place_name("府河") == "segment"  # bare tributary has value
+    assert classify_place_name("东荆河") == "segment"
+    assert classify_place_name("滠水") == "segment"
+    assert classify_place_name("联丰村") == "segment"
+    assert classify_place_name("和平街道") == "segment"
+    assert classify_place_name("蔡甸沌口片区") == "segment"
+
+
+def test_classify_points_for_anchors_and_compact_water():
+    assert classify_place_name("海绵科普展馆") == "point"
+    assert classify_place_name("府河大桥") == "point"  # modified, not a bare river name
+    assert classify_place_name("月湖") == "point"  # compact lake: geocoder point is meaningful
+    assert classify_place_name("野芷湖公园") == "point"
+
+
+def test_refine_precision_rejects_district_aliases_and_levels():
+    assert refine_precision("point", {"geocode_level": "POI", "query_name": "汉南区"}) == "reject"
+    assert refine_precision("point", {"geocode_level": "区县", "query_name": "武昌区"}) == "reject"
+    assert refine_precision("segment", {"geocode_level": "城市", "query_name": "武汉"}) == "reject"
+
+
+def test_refine_precision_segments_village_levels_and_passes_through():
+    assert refine_precision("point", {"geocode_level": "村庄", "query_name": "联丰村"}) == "segment"
+    assert refine_precision("point", {"geocode_level": "乡镇", "query_name": "某镇"}) == "segment"
+    assert refine_precision("point", {"geocode_level": "POI", "query_name": "海绵科普展馆"}) == "point"
+    assert refine_precision("segment", {"geocode_level": "POI", "query_name": "府河"}) == "segment"
+    assert refine_precision("reject", {"geocode_level": "POI", "query_name": "凼子"}) == "reject"

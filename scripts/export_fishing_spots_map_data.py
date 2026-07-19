@@ -212,10 +212,12 @@ def export(db_path: Path, out_path: Path) -> dict[str, Any]:
           s.confidence, s.source_text,
           s.fish_species,
           s.quality_score,
+          s.precision,
           v.title, v.url, v.author, v.publish_time
         FROM fishing_spots s
         LEFT JOIN videos v ON v.id = s.video_id
         WHERE s.longitude IS NOT NULL AND s.latitude IS NOT NULL
+          AND COALESCE(s.precision, 'point') != 'reject'
         ORDER BY COALESCE(s.confidence, 0) DESC, s.id ASC
         """
     ).fetchall()
@@ -256,6 +258,7 @@ def export(db_path: Path, out_path: Path) -> dict[str, Any]:
         candidate = {
             "id": item["id"],
             "video_id": item.get("video_id"),
+            "precision": item.get("precision") or "point",
             "title": item.get("title") or display_name,
             "author": item.get("author") or "",
             "url": item.get("url") or "",
@@ -273,6 +276,8 @@ def export(db_path: Path, out_path: Path) -> dict[str, Any]:
     features: list[dict[str, Any]] = []
     for index, group in enumerate(grouped.values(), 1):
         sources = sorted(group["sources_by_key"].values(), key=source_sort_key, reverse=True)
+        # A grouped feature is only as coarse as its least precise source.
+        group_precision = "segment" if any(s.get("precision") == "segment" for s in sources) else "point"
         monthly_scores: dict[str, dict[str, Any]] = {}
         for month in sorted({s.get("publish_month") for s in sources if s.get("publish_month")}):
             month_sources = [s for s in sources if s.get("publish_month") == month]
@@ -285,6 +290,7 @@ def export(db_path: Path, out_path: Path) -> dict[str, Any]:
         properties = {
             "id": f"spot-{index:04d}",
             "place_name": group["name"],
+            "precision": group_precision,
             "aliases": group["aliases"][:6],
             "source_count": len(sources),
             "confidence": confidence_score(sources),

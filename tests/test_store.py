@@ -172,3 +172,19 @@ def test_load_dotenv_reads_crlf_and_never_overrides(monkeypatch, tmp_path):
     assert load_dotenv() == tmp_path / ".env"
     assert os.environ["MIMO_API_KEY"] == "sk-real"  # existing env wins
     assert os.environ["OTHER"] == "q v"  # quotes and \r stripped
+
+
+def test_precision_classified_at_insert_and_backfilled(tmp_path):
+    with SqliteSpotStore(tmp_path / "t.sqlite") as store:
+        store.insert_record("武汉钓鱼", VIDEO, SPOT)  # 东湖, no precision set -> point
+        store.insert_record("武汉钓鱼", VIDEO, {**SPOT, "place_name": "府河", "query_name": "武汉府河"})
+        store.insert_record("武汉钓鱼", VIDEO, {**SPOT, "place_name": "武昌区", "query_name": "武昌区"})
+        rows = dict(store.conn.execute("SELECT place_name, precision FROM fishing_spots").fetchall())
+        assert rows["东湖"] == "point"
+        assert rows["府河"] == "segment"  # store gate classifies bare tributaries
+        assert rows["武昌区"] == "reject"  # and rejects admin names
+
+        # simulate a pre-tiering row (precision NULL) then re-init to trigger backfill
+        store.conn.execute("UPDATE fishing_spots SET precision=NULL WHERE place_name='府河'")
+        init_db(store.conn)
+        assert store.conn.execute("SELECT precision FROM fishing_spots WHERE place_name='府河'").fetchone()[0] == "segment"

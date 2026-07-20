@@ -16,5 +16,23 @@ services:
       retries: 12
     restart: unless-stopped
 
+  osm-import:
+    image: iboates/osm2pgsql:2.2.0
+    profiles: ["tools"]
+    entrypoint: ["osm2pgsql"]
+    environment:
+      PGHOST: postgis
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB:-fishing_vibe}
+      PGUSER: ${POSTGRES_USER:-fishing_vibe}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-fishing_vibe}
+      OSM_SCHEMA: ${OSM_SCHEMA:-osm_next}
+    volumes:
+      - ./data/osm:/data:ro
+      - ./osm:/config:ro
+    depends_on:
+      postgis:
+        condition: service_healthy
+
 volumes:
   postgis_data:

@@ -31,6 +31,14 @@ uv run python scripts/migrate_sqlite_to_postgis.py --replace
 
 脚本在同一事务内写入并校验各表行数、geometry 有效性；失败会整体回滚。原 SQLite 文件不会删除，可作为迁移备份。
 
+## OpenStreetMap 湖北数据
+
+行政区划、水体和水道导入到独立的 `osm` schema，详见 [`docs/osm-import.md`](osm-import.md)：
+
+```bash
+bash scripts/import_osm_hubei.sh
+```
+
 ## 常用命令
 
 ```bash

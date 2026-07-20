@@ -1,9 +1,9 @@
 {
   "type": "FeatureCollection",
   "name": "武汉钓鱼钓点",
-  "generated_at": "2026-07-19T19:35:31",
-  "source": "data/fishing_spots.sqlite",
-  "count": 124,
+  "generated_at": "2026-07-20T19:58:56",
+  "source": "PostGIS",
+  "count": 122,
   "features": [
     {
       "type": "Feature",
@@ -15,7 +15,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0113",
+        "id": "spot-0111",
         "place_name": "八库村",
         "precision": "segment",
         "aliases": [
@@ -84,7 +84,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0112",
+        "id": "spot-0110",
         "place_name": "闸口回水湾",
         "precision": "segment",
         "aliases": [
@@ -153,7 +153,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0103",
+        "id": "spot-0101",
         "place_name": "长塘",
         "precision": "segment",
         "aliases": [
@@ -374,7 +374,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0110",
+        "id": "spot-0108",
         "place_name": "花山小野河",
         "precision": "segment",
         "aliases": [
@@ -440,7 +440,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0106",
+        "id": "spot-0104",
         "place_name": "墨水湖闸口",
         "precision": "point",
         "aliases": [
@@ -502,7 +502,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0098",
+        "id": "spot-0096",
         "place_name": "野芷湖公园",
         "precision": "point",
         "aliases": [
@@ -631,7 +631,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0096",
+        "id": "spot-0094",
         "place_name": "金银湖",
         "precision": "segment",
         "aliases": [
@@ -851,7 +851,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0117",
+        "id": "spot-0115",
         "place_name": "兰亭公园",
         "precision": "point",
         "aliases": [
@@ -993,7 +993,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0092",
+        "id": "spot-0090",
         "place_name": "九峰水库",
         "precision": "point",
         "aliases": [
@@ -1182,7 +1182,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0090",
+        "id": "spot-0088",
         "place_name": "桃花岛",
         "precision": "point",
         "aliases": [
@@ -1242,7 +1242,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0084",
+        "id": "spot-0082",
         "place_name": "东西湖汉江",
         "precision": "segment",
         "aliases": [
@@ -1313,7 +1313,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0108",
+        "id": "spot-0106",
         "place_name": "太子湖",
         "precision": "point",
         "aliases": [
@@ -2032,7 +2032,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0114",
+        "id": "spot-0112",
         "place_name": "三角湖",
         "precision": "point",
         "aliases": [
@@ -2094,7 +2094,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0091",
+        "id": "spot-0089",
         "place_name": "东流港",
         "precision": "segment",
         "aliases": [
@@ -2154,7 +2154,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0107",
+        "id": "spot-0105",
         "place_name": "东湖光谷",
         "precision": "point",
         "aliases": [
@@ -2217,7 +2217,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0093",
+        "id": "spot-0091",
         "place_name": "二七长江大桥",
         "precision": "point",
         "aliases": [
@@ -2266,7 +2266,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0115",
+        "id": "spot-0113",
         "place_name": "南三环湿地公园",
         "precision": "point",
         "aliases": [
@@ -2328,7 +2328,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0111",
+        "id": "spot-0109",
         "place_name": "后湖",
         "precision": "segment",
         "aliases": [
@@ -2377,7 +2377,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0097",
+        "id": "spot-0095",
         "place_name": "吹笛景区",
         "precision": "point",
         "aliases": [
@@ -2432,7 +2432,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0109",
+        "id": "spot-0107",
         "place_name": "墨水湖",
         "precision": "point",
         "aliases": [
@@ -2481,7 +2481,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0088",
+        "id": "spot-0086",
         "place_name": "杨泗港长江大桥",
         "precision": "point",
         "aliases": [
@@ -2604,7 +2604,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0105",
+        "id": "spot-0103",
         "place_name": "滠水河",
         "precision": "segment",
         "aliases": [
@@ -2653,7 +2653,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0101",
+        "id": "spot-0099",
         "place_name": "白水湖",
         "precision": "segment",
         "aliases": [
@@ -2715,7 +2715,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0124",
+        "id": "spot-0122",
         "place_name": "磨山",
         "precision": "point",
         "aliases": [
@@ -2770,7 +2770,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0089",
+        "id": "spot-0087",
         "place_name": "童家湖闸口",
         "precision": "segment",
         "aliases": [
@@ -2837,7 +2837,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0104",
+        "id": "spot-0102",
         "place_name": "野芷湖闸口",
         "precision": "point",
         "aliases": [
@@ -3019,7 +3019,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0085",
+        "id": "spot-0083",
         "place_name": "青山湿地公园",
         "precision": "point",
         "aliases": [
@@ -3130,7 +3130,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0094",
+        "id": "spot-0092",
         "place_name": "野芷湖",
         "precision": "point",
         "aliases": [
@@ -3353,7 +3353,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0087",
+        "id": "spot-0085",
         "place_name": "龙阳湖",
         "precision": "point",
         "aliases": [
@@ -3446,7 +3446,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0086",
+        "id": "spot-0084",
         "place_name": "海绵科普公园",
         "precision": "point",
         "aliases": [
@@ -3503,7 +3503,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0099",
+        "id": "spot-0097",
         "place_name": "胜利水库",
         "precision": "segment",
         "aliases": [
@@ -3559,7 +3559,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0100",
+        "id": "spot-0098",
         "place_name": "新民河",
         "precision": "segment",
         "aliases": [
@@ -3627,7 +3627,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0095",
+        "id": "spot-0093",
         "place_name": "汤逊湖",
         "precision": "point",
         "aliases": [
@@ -3689,7 +3689,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0116",
+        "id": "spot-0114",
         "place_name": "金龙水寨生态乐园",
         "precision": "point",
         "aliases": [
@@ -3746,7 +3746,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0102",
+        "id": "spot-0100",
         "place_name": "中央大公园江夏",
         "precision": "point",
         "aliases": [
@@ -3804,7 +3804,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0054",
+        "id": "spot-0053",
         "place_name": "七海田园",
         "precision": "point",
         "aliases": [
@@ -3882,7 +3882,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0034",
+        "id": "spot-0033",
         "place_name": "东湖",
         "precision": "point",
         "aliases": [
@@ -3975,7 +3975,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0029",
+        "id": "spot-0028",
         "place_name": "二七桥",
         "precision": "point",
         "aliases": [
@@ -4066,7 +4066,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0064",
+        "id": "spot-0063",
         "place_name": "闸口",
         "precision": "point",
         "aliases": [
@@ -4157,7 +4157,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0030",
+        "id": "spot-0029",
         "place_name": "龙阳湖",
         "precision": "point",
         "aliases": [
@@ -4236,7 +4236,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0062",
+        "id": "spot-0061",
         "place_name": "三环",
         "precision": "point",
         "aliases": [
@@ -4294,7 +4294,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0121",
+        "id": "spot-0119",
         "place_name": "三角湖北侧公园",
         "precision": "point",
         "aliases": [
@@ -4425,7 +4425,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0040",
+        "id": "spot-0039",
         "place_name": "临大湖",
         "precision": "point",
         "aliases": [
@@ -4491,7 +4491,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0057",
+        "id": "spot-0056",
         "place_name": "临江大道",
         "precision": "point",
         "aliases": [],
@@ -4545,128 +4545,12 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          114.29957951618958,
-          30.623725838251485
-        ]
-      },
-      "properties": {
-        "id": "spot-0027",
-        "place_name": "九五八三",
-        "precision": "point",
-        "aliases": [
-          "中国人民解放军空降兵部队医院"
-        ],
-        "source_count": 1,
-        "confidence": 0.9,
-        "quality_score": null,
-        "score_count": 0,
-        "score_min": null,
-        "score_max": null,
-        "fish_species": [
-          "鲫鱼",
-          "黄尾鲴",
-          "鲤鱼",
-          "鳊鱼"
-        ],
-        "keywords": [],
-        "monthly_scores": {
-          "06": {
-            "source_count": 1,
-            "quality_score": null,
-            "score_count": 0,
-            "score_min": null,
-            "score_max": null
-          }
-        },
-        "sources": [
-          {
-            "id": 248,
-            "video_id": 128,
-            "precision": "point",
-            "title": "武汉汉口江滩钓鱼 大鲫鱼鲤鱼切线 小伟野钓饵料 #武汉汉口江滩钓鱼 #汉口桃花岛钓鱼 #江钓大鲫鱼 #坐公交车钓鱼人",
-            "author": "小伟短竿野钓",
-            "url": "https://www.douyin.com/video/7648629095072535923",
-            "publish_time": "2026-06-07 20:27",
-            "publish_month": "06",
-            "confidence": 0.9,
-            "fish_species": [
-              "鲫鱼",
-              "黄尾鲴",
-              "鲤鱼",
-              "鳊鱼"
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "type": "Feature",
-      "geometry": {
-        "type": "Point",
-        "coordinates": [
-          114.19765426806538,
-          30.509131085096346
-        ]
-      },
-      "properties": {
-        "id": "spot-0073",
-        "place_name": "云梦泽",
-        "precision": "point",
-        "aliases": [
-          "云梦泽spa"
-        ],
-        "source_count": 1,
-        "confidence": 0.9,
-        "quality_score": null,
-        "score_count": 0,
-        "score_min": null,
-        "score_max": null,
-        "fish_species": [
-          "鲢鳙"
-        ],
-        "keywords": [
-          "没口",
-          "鱼肥",
-          "钓场多"
-        ],
-        "monthly_scores": {
-          "06": {
-            "source_count": 1,
-            "quality_score": null,
-            "score_count": 0,
-            "score_min": null,
-            "score_max": null
-          }
-        },
-        "sources": [
-          {
-            "id": 313,
-            "video_id": 413,
-            "precision": "point",
-            "title": "武汉及周边钓友可以点我主页置顶作品进钓友群，进我抖音粉丝群看公告也可以进圈，每天分享陇南最新钓点和鱼情\n#武汉钓友   #武汉钓点    #钓点分享 #钓点推荐分享 #寻找钓鱼搭子",
-            "author": "爆钓分享-金顺福",
-            "url": "https://www.douyin.com/video/7655246513836420992",
-            "publish_time": "2026-06-25 16:26",
-            "publish_month": "06",
-            "confidence": 0.9,
-            "fish_species": [
-              "鲢鳙"
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "type": "Feature",
-      "geometry": {
-        "type": "Point",
-        "coordinates": [
           114.34578935087217,
           30.461324196415287
         ]
       },
       "properties": {
-        "id": "spot-0065",
+        "id": "spot-0064",
         "place_name": "仙剑村",
         "precision": "segment",
         "aliases": [
@@ -4730,7 +4614,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0075",
+        "id": "spot-0073",
         "place_name": "光谷未来科技城",
         "precision": "point",
         "aliases": [
@@ -4796,7 +4680,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0123",
+        "id": "spot-0121",
         "place_name": "关江广场",
         "precision": "point",
         "aliases": [
@@ -4849,7 +4733,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0055",
+        "id": "spot-0054",
         "place_name": "北洋桥",
         "precision": "point",
         "aliases": [],
@@ -4919,7 +4803,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0061",
+        "id": "spot-0060",
         "place_name": "华中农业大学生猪健康养殖协同创新中心",
         "precision": "point",
         "aliases": [
@@ -4980,7 +4864,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0060",
+        "id": "spot-0059",
         "place_name": "华农",
         "precision": "point",
         "aliases": [
@@ -5041,7 +4925,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0066",
+        "id": "spot-0065",
         "place_name": "后官湖",
         "precision": "point",
         "aliases": [
@@ -5108,7 +4992,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0069",
+        "id": "spot-0068",
         "place_name": "回水湾",
         "precision": "point",
         "aliases": [
@@ -5178,7 +5062,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0032",
+        "id": "spot-0031",
         "place_name": "园博园",
         "precision": "point",
         "aliases": [
@@ -5349,7 +5233,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0041",
+        "id": "spot-0040",
         "place_name": "小港塘",
         "precision": "point",
         "aliases": [
@@ -5415,7 +5299,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0067",
+        "id": "spot-0066",
         "place_name": "小茶湖",
         "precision": "point",
         "aliases": [],
@@ -5480,7 +5364,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0028",
+        "id": "spot-0027",
         "place_name": "小顶帽",
         "precision": "point",
         "aliases": [
@@ -5548,7 +5432,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0045",
+        "id": "spot-0044",
         "place_name": "府河",
         "precision": "segment",
         "aliases": [],
@@ -5599,7 +5483,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0079",
+        "id": "spot-0077",
         "place_name": "府河",
         "precision": "segment",
         "aliases": [
@@ -5659,7 +5543,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0051",
+        "id": "spot-0050",
         "place_name": "建设十路",
         "precision": "point",
         "aliases": [],
@@ -5715,7 +5599,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0058",
+        "id": "spot-0057",
         "place_name": "德平路",
         "precision": "point",
         "aliases": [],
@@ -5774,7 +5658,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0122",
+        "id": "spot-0120",
         "place_name": "打谷渡河桥",
         "precision": "point",
         "aliases": [
@@ -5835,7 +5719,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0118",
+        "id": "spot-0116",
         "place_name": "护栏",
         "precision": "point",
         "aliases": [
@@ -5888,7 +5772,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0072",
+        "id": "spot-0071",
         "place_name": "新河大桥",
         "precision": "point",
         "aliases": [],
@@ -5942,7 +5826,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0046",
+        "id": "spot-0045",
         "place_name": "曲河桥",
         "precision": "point",
         "aliases": [
@@ -5995,7 +5879,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0083",
+        "id": "spot-0081",
         "place_name": "江夏区朱家河地铁站附近河道",
         "precision": "point",
         "aliases": [
@@ -6058,7 +5942,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0074",
+        "id": "spot-0072",
         "place_name": "江滩",
         "precision": "point",
         "aliases": [
@@ -6115,7 +5999,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0031",
+        "id": "spot-0030",
         "place_name": "汤家山村",
         "precision": "segment",
         "aliases": [],
@@ -6228,7 +6112,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0063",
+        "id": "spot-0062",
         "place_name": "汤野渠",
         "precision": "segment",
         "aliases": [
@@ -6286,7 +6170,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0059",
+        "id": "spot-0058",
         "place_name": "沈家湖",
         "precision": "point",
         "aliases": [],
@@ -6344,7 +6228,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0081",
+        "id": "spot-0079",
         "place_name": "海绵科普展馆",
         "precision": "point",
         "aliases": [
@@ -6403,7 +6287,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0044",
+        "id": "spot-0043",
         "place_name": "涉水河",
         "precision": "segment",
         "aliases": [
@@ -6451,7 +6335,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0052",
+        "id": "spot-0051",
         "place_name": "清新居",
         "precision": "point",
         "aliases": [
@@ -6562,7 +6446,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0120",
+        "id": "spot-0118",
         "place_name": "生物科技职业学院",
         "precision": "point",
         "aliases": [
@@ -6623,7 +6507,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0119",
+        "id": "spot-0117",
         "place_name": "福元路",
         "precision": "point",
         "aliases": [
@@ -6750,7 +6634,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0038",
+        "id": "spot-0037",
         "place_name": "红色暴雨",
         "precision": "point",
         "aliases": [
@@ -6803,7 +6687,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0050",
+        "id": "spot-0049",
         "place_name": "花山",
         "precision": "point",
         "aliases": [],
@@ -6866,7 +6750,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0048",
+        "id": "spot-0047",
         "place_name": "莫子湖",
         "precision": "point",
         "aliases": [
@@ -6919,7 +6803,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0071",
+        "id": "spot-0070",
         "place_name": "蔡甸区红海村",
         "precision": "segment",
         "aliases": [
@@ -6977,7 +6861,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0076",
+        "id": "spot-0074",
         "place_name": "藏龙体育中心",
         "precision": "point",
         "aliases": [],
@@ -7135,7 +7019,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0047",
+        "id": "spot-0046",
         "place_name": "通胜河",
         "precision": "segment",
         "aliases": [
@@ -7201,7 +7085,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0080",
+        "id": "spot-0078",
         "place_name": "通胜河堤",
         "precision": "point",
         "aliases": [
@@ -7267,7 +7151,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0082",
+        "id": "spot-0080",
         "place_name": "道德平路",
         "precision": "point",
         "aliases": [
@@ -7328,7 +7212,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0037",
+        "id": "spot-0036",
         "place_name": "野凼子",
         "precision": "point",
         "aliases": [
@@ -7389,7 +7273,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0043",
+        "id": "spot-0042",
         "place_name": "野子湖闸口",
         "precision": "point",
         "aliases": [
@@ -7453,7 +7337,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0078",
+        "id": "spot-0076",
         "place_name": "野芷湖公园",
         "precision": "point",
         "aliases": [
@@ -7513,7 +7397,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0033",
+        "id": "spot-0032",
         "place_name": "长荆立交桥",
         "precision": "point",
         "aliases": [
@@ -7574,7 +7458,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0035",
+        "id": "spot-0034",
         "place_name": "陵园",
         "precision": "point",
         "aliases": [
@@ -7629,7 +7513,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0053",
+        "id": "spot-0052",
         "place_name": "青山北湖",
         "precision": "point",
         "aliases": [
@@ -7690,7 +7574,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0056",
+        "id": "spot-0055",
         "place_name": "青山区石桥游园",
         "precision": "point",
         "aliases": [
@@ -7743,7 +7627,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0077",
+        "id": "spot-0075",
         "place_name": "青山江滩公园",
         "precision": "point",
         "aliases": [
@@ -7796,7 +7680,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0039",
+        "id": "spot-0038",
         "place_name": "青梢",
         "precision": "point",
         "aliases": [
@@ -7849,7 +7733,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0070",
+        "id": "spot-0069",
         "place_name": "青菱河畔公园",
         "precision": "point",
         "aliases": [],
@@ -7907,7 +7791,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0042",
+        "id": "spot-0041",
         "place_name": "鹦鹉洲大桥",
         "precision": "point",
         "aliases": [
@@ -7964,7 +7848,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0068",
+        "id": "spot-0067",
         "place_name": "黄麻湖",
         "precision": "point",
         "aliases": [],
@@ -8029,7 +7913,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0049",
+        "id": "spot-0048",
         "place_name": "龙王镇",
         "precision": "segment",
         "aliases": [
@@ -8097,7 +7981,7 @@
         ]
       },
       "properties": {
-        "id": "spot-0036",
+        "id": "spot-0035",
         "place_name": "龙羊湖",
         "precision": "point",
         "aliases": [

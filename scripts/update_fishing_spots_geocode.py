@@ -13,14 +13,18 @@ import argparse
 import json
 import os
 import random
-import sqlite3
+import psycopg
+from psycopg.rows import dict_row
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "data" / "fishing_spots.sqlite"
+sys.path.insert(0, str(ROOT))
+
+from spot_intake import Config
+
 GEOCODE_SCRIPT = ROOT / ".agents" / "skills" / "geocode" / "geocode.py"
 REQUEST_TIMEOUT = 60
 
@@ -177,7 +181,7 @@ def main() -> None:
   %(prog)s --where "geocode_level = '区县及以上级行政区划'"  # 只更新行政区划级别记录
         """,
     )
-    ap.add_argument("--db", default=str(DB_PATH), help="SQLite 数据库路径")
+    ap.add_argument("--database-url", default=None, help="PostgreSQL DSN（默认读取 FISHING_VIBE_DATABASE_URL）")
     ap.add_argument("--dry-run", action="store_true", help="只预览，不写入数据库")
     ap.add_argument("--batch", type=int, default=0, help="最多处理多少条；0 表示全部")
     ap.add_argument("--delay", type=float, default=1.0, help="每次请求间隔秒数（默认 1.0）")
@@ -186,22 +190,19 @@ def main() -> None:
     ap.add_argument("--order-by", default="id", help="排序字段（默认 id）")
     args = ap.parse_args()
 
-    db_path = Path(args.db)
-    if not db_path.exists():
-        print(f"数据库不存在: {db_path}", file=sys.stderr)
-        sys.exit(1)
-
-    conn = sqlite3.connect(db_path, isolation_level=None)
-    conn.row_factory = sqlite3.Row
+    database_url = args.database_url or Config.from_env().database_url
+    conn = psycopg.connect(database_url, autocommit=True, row_factory=dict_row)
 
     # 构建查询
-    sql = "SELECT id, place_name, query_name, longitude, latitude, geocode_score, geocode_level FROM fishing_spots"
+    sql = """SELECT id, place_name, query_name, ST_X(location) AS longitude,
+                    ST_Y(location) AS latitude, geocode_score, geocode_level
+             FROM fishing_spots"""
     params: list = []
     if args.where:
         sql += f" WHERE {args.where}"
     sql += f" ORDER BY {args.order_by}"
     if args.batch > 0:
-        sql += " LIMIT ?"
+        sql += " LIMIT %s"
         params.append(args.batch)
 
     rows = conn.execute(sql, params).fetchall()
@@ -247,8 +248,8 @@ def main() -> None:
         if not args.dry_run:
             conn.execute(
                 """UPDATE fishing_spots
-                   SET longitude = ?, latitude = ?, geocode_score = ?, geocode_level = ?
-                   WHERE id = ?""",
+                   SET location=ST_SetSRID(ST_MakePoint(%s,%s),4326), geocode_score=%s, geocode_level=%s
+                   WHERE id=%s""",
                 (new_lon, new_lat, score, level, row_id),
             )
             updated += 1

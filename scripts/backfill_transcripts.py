@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))  # allow running the script directly without installing the package
 
 from spot_intake import Config, Intake, IntakeOptions
-from spot_intake.adapters import GeocodeSkill, MimoTranscriber, NullLlm, OpenaiLlm, OpencliBrowser, SqliteSpotStore
+from spot_intake.adapters import GeocodeSkill, MimoTranscriber, NullLlm, OpenaiLlm, OpencliBrowser, PostgisSpotStore
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,7 +46,7 @@ def main() -> int:
         print("ERROR: MIMO_API_KEY is not set", file=sys.stderr)
         return 2
 
-    with SqliteSpotStore(config.db_path) as store:
+    with PostgisSpotStore(config.database_url) as store:
         pending = store.videos_pending_transcription(limit=args.limit)
         print(f"[plan] {len(pending)} videos pending transcription", flush=True)
         if args.dry_run:

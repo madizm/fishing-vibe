@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Export SQLite fishing spots to a browser-friendly GeoJSON-like JSON file."""
+"""Export PostGIS fishing spots to a browser-friendly GeoJSON-like JSON file."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import re
-import sqlite3
+import psycopg
+from psycopg.rows import dict_row
 from datetime import datetime
 from pathlib import Path
 from statistics import mean
@@ -17,10 +18,10 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))  # allow running the script directly without installing the package
 
-from spot_intake.adapters.sqlite_store import init_db
+from spot_intake import Config
+from spot_intake.adapters.postgis_store import init_db
 from spot_intake.extract import extract_fish_species, normalize_fish_species
 
-DEFAULT_DB = ROOT / "data" / "fishing_spots.sqlite"
 DEFAULT_OUT = ROOT / "web" / "fishing-spots.json"
 
 CATEGORY_LABELS = {
@@ -140,12 +141,12 @@ def aggregate_keywords(sources: list[dict[str, Any]], limit: int = 12) -> list[s
     return [item["label"] for item in ranked[:limit]]
 
 
-def table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
-    return row is not None
+def table_exists(conn: psycopg.Connection, name: str) -> bool:
+    row = conn.execute("SELECT to_regclass(%s)", (name,)).fetchone()
+    return bool(row and row["to_regclass"])
 
 
-def load_comment_keyword_summaries(conn: sqlite3.Connection) -> dict[int, dict[str, Any]]:
+def load_comment_keyword_summaries(conn: psycopg.Connection) -> dict[int, dict[str, Any]]:
     """Build per-video comment summaries from comment_keywords."""
     if not table_exists(conn, "comment_keywords"):
         return {}
@@ -158,7 +159,7 @@ def load_comment_keyword_summaries(conn: sqlite3.Connection) -> dict[int, dict[s
           category,
           COUNT(*) AS count,
           AVG(COALESCE(confidence, 0)) AS avg_confidence,
-          GROUP_CONCAT(DISTINCT evidence) AS evidence
+          STRING_AGG(DISTINCT evidence, ',') AS evidence
         FROM comment_keywords
         WHERE video_id IS NOT NULL
           AND TRIM(COALESCE(keyword, '')) != ''
@@ -200,15 +201,15 @@ def load_comment_keyword_summaries(conn: sqlite3.Connection) -> dict[int, dict[s
     return by_video
 
 
-def export(db_path: Path, out_path: Path) -> dict[str, Any]:
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+def export(database_url: str, out_path: Path) -> dict[str, Any]:
+    conn = psycopg.connect(database_url, autocommit=True, row_factory=dict_row)
     init_db(conn)  # shared schema contract from spot_intake (idempotent)
     comment_keyword_summaries = load_comment_keyword_summaries(conn)
     rows = conn.execute(
         """
         SELECT
-          s.id, s.video_id, s.place_name, s.query_name, s.longitude, s.latitude,
+          s.id, s.video_id, s.place_name, s.query_name,
+          ST_X(s.location) AS longitude, ST_Y(s.location) AS latitude,
           s.confidence, s.source_text,
           s.fish_species,
           s.quality_score,
@@ -216,11 +217,12 @@ def export(db_path: Path, out_path: Path) -> dict[str, Any]:
           v.title, v.url, v.author, v.publish_time
         FROM fishing_spots s
         LEFT JOIN videos v ON v.id = s.video_id
-        WHERE s.longitude IS NOT NULL AND s.latitude IS NOT NULL
+        WHERE s.location IS NOT NULL
           AND COALESCE(s.precision, 'point') != 'reject'
         ORDER BY COALESCE(s.confidence, 0) DESC, s.id ASC
         """
     ).fetchall()
+    conn.close()
 
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
@@ -323,7 +325,7 @@ def export(db_path: Path, out_path: Path) -> dict[str, Any]:
         "type": "FeatureCollection",
         "name": "武汉钓鱼钓点",
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "source": str(db_path.relative_to(ROOT) if db_path.is_relative_to(ROOT) else db_path),
+        "source": "PostGIS",
         "count": len(features),
         "features": features,
     }
@@ -334,10 +336,10 @@ def export(db_path: Path, out_path: Path) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite database path")
+    parser.add_argument("--database-url", default=None, help="PostgreSQL DSN (default: FISHING_VIBE_DATABASE_URL)")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="Output JSON path")
     args = parser.parse_args()
-    payload = export(args.db, args.out)
+    payload = export(args.database_url or Config.from_env().database_url, args.out)
     print(f"exported {payload['count']} spots -> {args.out}")
 
 

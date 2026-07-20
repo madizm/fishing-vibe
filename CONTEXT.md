@@ -5,7 +5,7 @@ Domain glossary for fishing-vibe. Use these terms in code, issues, and reviews �
 ## Terms
 
 - **钓点 (fishing spot)** — the central entity. A geocodable place (river, lake, reservoir, riverbank, bridge, sluice, park, village…) where people fish, extracted from Douyin videos and their comments. Persisted in `fishing_spots`, exported as GeoJSON for the web and miniprogram maps.
-- **收录 (spot intake)** — the pipeline that turns a Douyin video URL or search keyword into persisted 钓点: extract page text/comments/transcripts → extract place candidates and 鱼种 → geocode (with POI auto-correction) → score quality → write to SQLite. Implemented by the `spot_intake` package.
+- **收录 (spot intake)** — the pipeline that turns a Douyin video URL or search keyword into persisted 钓点: extract page text/comments/transcripts → extract place candidates and 鱼种 → geocode (with POI auto-correction) → score quality → write to PostGIS. Implemented by the `spot_intake` package.
 - **鱼种 (fish species)** — fish mentioned in a video or comment. Canonical names (e.g. 黄尾鲴, 鲫鱼, 翘嘴) come from the single lexicon in `spot_intake/vocabulary.py` (`FISH_PATTERNS`); surface forms (工程鲫, 大板鲫, 翘壳…) normalize to canonical names. Never copy the lexicon.
 - **质量分 (quality score)** — 0–1 score on a 钓点, normalized from an LLM's 1–5 rating of what comments say about fish activity, access, and restrictions. Confidence-weighted when aggregating groups; `null` means "no information", not "bad".
 - **评论关键词 (comment keywords)** — short categorized labels extracted from comments (e.g. 有口, 空军, 禁钓, 停车方便). Categories are the fixed enum in `COMMENT_KEYWORD_CATEGORIES`.

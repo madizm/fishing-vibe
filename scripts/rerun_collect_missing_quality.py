@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import argparse
 import random
-import sqlite3
+import psycopg
+from psycopg.rows import dict_row
 import sys
 import time
 from pathlib import Path
@@ -19,13 +20,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))  # allow running the script directly without installing the package
 
 from spot_intake import Config, Intake, IntakeOptions
-from spot_intake.adapters import GeocodeSkill, NullLlm, OpenaiLlm, OpencliBrowser, SqliteSpotStore
+from spot_intake.adapters import GeocodeSkill, NullLlm, OpenaiLlm, OpencliBrowser, PostgisSpotStore
 
 
-def load_urls(db_path: Path, limit: int = 0) -> list[dict]:
+def load_urls(database_url: str, limit: int = 0) -> list[dict]:
     """Return distinct video URLs with at least one NULL quality_score spot."""
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg.connect(database_url, row_factory=dict_row)
     try:
         query = """
             SELECT
@@ -42,7 +42,7 @@ def load_urls(db_path: Path, limit: int = 0) -> list[dict]:
             ORDER BY MAX(s.id) DESC
         """
         if limit > 0:
-            query += " LIMIT ?"
+            query += " LIMIT %s"
             rows = conn.execute(query, (limit,)).fetchall()
         else:
             rows = conn.execute(query).fetchall()
@@ -62,7 +62,7 @@ def sleep_between(index: int, total: int, delay_min: float, delay_max: float) ->
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--db", type=Path, default=None, help="SQLite database path (default: env or data/fishing_spots.sqlite)")
+    ap.add_argument("--database-url", default=None, help="PostgreSQL DSN (default: FISHING_VIBE_DATABASE_URL)")
     ap.add_argument("--limit", type=int, default=0, help="Maximum number of distinct video URLs to process; 0 means all")
     ap.add_argument("--dry-run", action="store_true", help="Only print URLs that would be processed")
     ap.add_argument("--continue-on-error", action="store_true", help="Continue with remaining URLs if one collect run fails")
@@ -83,13 +83,11 @@ def main() -> int:
     args = ap.parse_args()
 
     config = Config.from_env()
-    db_path = args.db or config.db_path
-    if not db_path.exists():
-        raise FileNotFoundError(db_path)
+    database_url = args.database_url or config.database_url
     if args.limit < 0:
         raise ValueError("--limit must be >= 0")
 
-    items = load_urls(db_path, args.limit)
+    items = load_urls(database_url, args.limit)
     print(f"[info] found {len(items)} video URL(s) with NULL quality_score spots", flush=True)
     if not items:
         return 0
@@ -113,7 +111,7 @@ def main() -> int:
         delay_max=0,
     )
     llm = NullLlm() if args.no_llm else OpenaiLlm(args.llm_url or config.llm_url, debug=not args.quiet_llm)
-    with SqliteSpotStore(db_path) as store, OpencliBrowser(args.session, cwd=config.root) as browser:
+    with PostgisSpotStore(database_url) as store, OpencliBrowser(args.session, cwd=config.root) as browser:
         intake = Intake(
             browser=browser,
             llm=llm,

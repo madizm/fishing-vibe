@@ -1,5 +1,5 @@
 """Intake orchestration tests. Fakes sit at the four seams; no browser, no LLM,
-no SQLite, no subprocess — the interface is the test surface."""
+no database, no subprocess — the interface is the test surface."""
 
 import json
 from pathlib import Path

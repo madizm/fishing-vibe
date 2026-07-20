@@ -1,6 +1,6 @@
 """Pure extraction and normalization logic for spot intake.
 
-Everything in this module is side-effect free: no browser, no LLM, no SQLite,
+Everything in this module is side-effect free: no browser, no LLM, no database,
 no filesystem. This is the test surface of the intake module.
 """
 

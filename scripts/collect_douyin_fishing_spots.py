@@ -3,14 +3,14 @@
 
 All behavior lives in the spot_intake package: this script only parses flags,
 wires the production adapters (opencli browser, OpenAI-compatible LLM, geocode
-skill, SQLite), and prints the resulting JSON.
+skill, PostGIS), and prints the resulting JSON.
 
 Pipeline:
 1. opencli douyin search <keyword> (or a single --url)
 2. opencli browser open/extract each video URL
 3. extract title, publish time, place candidates, fish species
 4. baidu geocode
-5. insert into SQLite
+5. insert into PostGIS
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))  # allow running the script directly without installing the package
 
 from spot_intake import Config, Intake, IntakeOptions
-from spot_intake.adapters import GeocodeSkill, MimoTranscriber, NullLlm, OpenaiLlm, OpencliBrowser, OpencliDouyinSearch, SqliteSpotStore
+from spot_intake.adapters import GeocodeSkill, MimoTranscriber, NullLlm, OpenaiLlm, OpencliBrowser, OpencliDouyinSearch, PostgisSpotStore
 from spot_intake.fixtures import load_comments_fixture, load_extracted_fixture, load_search_item_fixture
 
 
@@ -80,7 +80,7 @@ def build_intake(args: argparse.Namespace, config: Config, *, with_store: bool) 
         delay_max=args.delay_max,
     )
     llm = NullLlm() if args.no_llm else OpenaiLlm(args.llm_url or config.llm_url, debug=not args.quiet_llm)
-    store = SqliteSpotStore(config.db_path) if with_store else _UnneededStore()
+    store = PostgisSpotStore(config.database_url) if with_store else _UnneededStore()
     transcriber = None
     if args.include_transcript and config.mimo_api_key:
         transcriber = MimoTranscriber(api_key=config.mimo_api_key, model=config.asr_model)
@@ -152,7 +152,7 @@ def main() -> None:
     results = [spot for report in reports for spot in report.spots]
     comment_results = [report.comment_result for report in reports if report.comment_result]
     transcript_statuses = {report.video["url"]: report.transcript_status for report in reports if report.transcript_status}
-    print(json.dumps({"inserted_spots": len(results), "results": results, "comment_results": comment_results, "transcript_statuses": transcript_statuses, "db": str(config.db_path)}, ensure_ascii=False, indent=2))
+    print(json.dumps({"inserted_spots": len(results), "results": results, "comment_results": comment_results, "transcript_statuses": transcript_statuses, "database": "PostGIS"}, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """Seam definitions for spot intake.
 
 Each Protocol is a seam: production adapters (opencli subprocess, OpenAI-compatible
-HTTP, geocode skill, SQLite) satisfy them in production; fakes satisfy them in tests.
+HTTP, geocode skill, PostGIS) satisfy them in production; fakes satisfy them in tests.
 Callers and tests cross the same interface.
 """
 

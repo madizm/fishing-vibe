@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))  # allow running the script directly without installing the package
 
 from spot_intake import Config, Intake, IntakeOptions
-from spot_intake.adapters import GeocodeSkill, OpenaiLlm, SqliteSpotStore
+from spot_intake.adapters import GeocodeSkill, OpenaiLlm, PostgisSpotStore
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,9 +45,9 @@ def distance_m(lon1: float, lat1: float, lon2: float, lat2: float) -> int:
     return round(math.hypot((lon1 - lon2) * 95000, (lat1 - lat2) * 111000))
 
 
-def build_divergence_report(store: SqliteSpotStore, geocoder: GeocodeSkill, city: str) -> list[dict]:
+def build_divergence_report(store: PostgisSpotStore, geocoder: GeocodeSkill, city: str) -> list[dict]:
     rows = store.conn.execute(
-        """SELECT s.id, s.video_id, s.place_name, s.longitude, s.latitude, s.source_type, s.geocode_score
+        """SELECT s.id, s.video_id, s.place_name, ST_X(s.location), ST_Y(s.location), s.source_type, s.geocode_score
            FROM fishing_spots s ORDER BY s.id"""
     ).fetchall()
     report: list[dict] = []
@@ -75,7 +75,7 @@ def main() -> int:
     args = parse_args()
     config = Config.from_env()
 
-    with SqliteSpotStore(config.db_path) as store:
+    with PostgisSpotStore(config.database_url) as store:
         targets = store.videos_with_transcript(status="ok", limit=args.limit)
         print(f"[plan] {len(targets)} videos with usable transcripts", flush=True)
         if args.dry_run:

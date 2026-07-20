@@ -149,7 +149,7 @@ def build_extraction_report(
     comment_keyword_group_size: int = 20,
 ) -> dict:
     """Deterministic extraction report for tests and dry runs: parsing only,
-    no SQLite writes and no geocoding."""
+    no database writes and no geocoding."""
     video = parse_video(search_item, extracted, city, llm)
     report: dict = {"video": video}
     if comments is not None:

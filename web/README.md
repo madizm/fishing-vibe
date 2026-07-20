@@ -1,11 +1,11 @@
 # 武汉钓鱼钓点地图
 
-基于项目已有 SQLite 数据 `data/fishing_spots.sqlite` 导出的天地图 Web 应用。
+基于项目 PostGIS 数据导出的天地图 Web 应用。数据库启动和迁移见 [`docs/postgis.md`](../docs/postgis.md)。
 
 ## 更新地图数据
 
 ```bash
-python scripts/export_fishing_spots_map_data.py
+uv run python scripts/export_fishing_spots_map_data.py
 ```
 
 默认输出：`web/fishing-spots.json`。

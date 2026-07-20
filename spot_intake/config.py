@@ -42,7 +42,7 @@ def load_dotenv() -> Path | None:
 @dataclass(frozen=True)
 class Config:
     root: Path
-    db_path: Path
+    database_url: str
     geocode_script: Path
     llm_url: str
     downloads_dir: Path
@@ -55,7 +55,10 @@ class Config:
     def from_env(cls, root: Path | None = None) -> "Config":
         load_dotenv()
         root = root or Path(__file__).resolve().parents[1]
-        db_path = Path(os.environ["FISHING_VIBE_DB"]) if os.getenv("FISHING_VIBE_DB") else root / "data" / "fishing_spots.sqlite"
+        database_url = os.getenv(
+            "FISHING_VIBE_DATABASE_URL",
+            "postgresql://fishing_vibe:fishing_vibe@localhost:5432/fishing_vibe",
+        )
         geocode_script = (
             Path(os.environ["GEOCODE_SCRIPT"]) if os.getenv("GEOCODE_SCRIPT") else root / ".agents" / "skills" / "geocode" / "geocode.py"
         )
@@ -71,7 +74,7 @@ class Config:
         geocode_provider = os.getenv("FISHING_VIBE_GEOCODE_PROVIDER", "baidu")
         return cls(
             root=root,
-            db_path=db_path,
+            database_url=database_url,
             geocode_script=geocode_script,
             llm_url=llm_url,
             downloads_dir=downloads_dir,
